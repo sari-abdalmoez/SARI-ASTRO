@@ -1,0 +1,2 @@
+-keep class com.sari.astro.nativebridge.NativeCore { *; }
+-keepclasseswithmembernames class * { native <methods>; }

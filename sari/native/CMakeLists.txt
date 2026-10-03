@@ -1,0 +1,27 @@
+cmake_minimum_required(VERSION 3.18)
+project(sari_astro CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+add_compile_options(-Wall -Wextra -fvisibility=hidden)
+add_library(sari_core STATIC
+  io/image.cpp stars/stars.cpp registration/registration.cpp
+  stacking/stacking.cpp quality/quality.cpp memory/budget.cpp)
+target_include_directories(sari_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+find_package(Threads REQUIRED)
+target_link_libraries(sari_core PUBLIC Threads::Threads)
+
+if(ANDROID)
+  add_library(sari_jni SHARED jni/sari_jni.cpp)
+  target_link_libraries(sari_jni sari_core log)
+  # 16 KB page-size alignment for Android 15+ devices
+  target_link_options(sari_jni PRIVATE -Wl,-z,max-page-size=16384)
+else()
+  enable_testing()
+  add_executable(sari_tests tests/test_main.cpp)
+  target_link_libraries(sari_tests sari_core)
+  add_test(NAME sari_tests COMMAND sari_tests)
+endif()
