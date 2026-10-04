@@ -1,0 +1,86 @@
+name: Build SARI Astro
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run native engine tests with sanitizers
+        working-directory: sari/native
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O1 -g -fsanitize=address,undefined -pthread \
+            io/image.cpp stars/stars.cpp registration/registration.cpp \
+            stacking/stacking.cpp quality/quality.cpp memory/budget.cpp \
+            tests/test_main.cpp -o /tmp/sari_tests
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 /tmp/sari_tests
+
+  android:
+    needs: native-tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+
+      - name: Install pinned SDK / NDK / CMake
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "ndk;26.1.10909125" \
+            "cmake;3.22.1"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build exactly one release APK
+        working-directory: sari
+        run: |
+          set -euo pipefail
+          gradle --no-daemon --stacktrace clean testDebugUnitTest assembleRelease
+
+      - name: Validate APK
+        working-directory: sari
+        run: |
+          set -euo pipefail
+          mapfile -t apks < <(find app/build/outputs/apk/release -type f -name '*.apk' -print)
+          test "${#apks[@]}" -eq 1
+          apk="${apks[0]}"
+          test -s "$apk"
+          size=$(stat -c '%s' "$apk")
+          test "$size" -ge 5242880
+          unzip -t "$apk" >/dev/null
+          unzip -l "$apk" | grep -q 'lib/arm64-v8a/libsari_jni.so'
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$apk" >/dev/null
+          rm -rf dist
+          mkdir -p dist
+          cp "$apk" dist/SARI-Astro.apk
+          test "$(find dist -maxdepth 1 -type f -name '*.apk' | wc -l)" -eq 1
+
+      - name: Upload exactly one APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SARI-Astro-APK
+          path: sari/dist/SARI-Astro.apk
+          if-no-files-found: error
+          compression-level: 0
