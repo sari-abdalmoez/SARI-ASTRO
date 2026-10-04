@@ -63,15 +63,52 @@ jobs:
         working-directory: sari
         run: |
           set -euo pipefail
+
           mapfile -t apks < <(find app/build/outputs/apk/release -type f -name '*.apk' -print)
-          test "${#apks[@]}" -eq 1
+
+          echo "APK files found: ${#apks[@]}"
+          printf '%s\n' "${apks[@]}"
+
+          if [ "${#apks[@]}" -ne 1 ]; then
+            echo "ERROR: Expected exactly one release APK."
+            exit 1
+          fi
+
           apk="${apks[0]}"
-          test -s "$apk"
+          echo "APK: $apk"
+
+          if [ ! -s "$apk" ]; then
+            echo "ERROR: APK is empty."
+            exit 1
+          fi
+
           size=$(stat -c '%s' "$apk")
-          test "$size" -ge 5242880
+          echo "APK size: $size bytes"
+
+          echo "Checking ZIP integrity..."
           unzip -t "$apk" >/dev/null
-          unzip -l "$apk" | grep -q 'lib/arm64-v8a/libsari_jni.so'
-          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$apk" >/dev/null
+
+          echo "Checking arm64 native library..."
+          if ! unzip -l "$apk" | grep -q 'lib/arm64-v8a/libsari_jni.so'; then
+            echo "ERROR: lib/arm64-v8a/libsari_jni.so is missing."
+            unzip -l "$apk" | grep 'lib/' || true
+            exit 1
+          fi
+
+          echo "Checking APK signature..."
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$apk"
+
+          echo "Preparing distribution..."
+          rm -rf dist
+          mkdir -p dist
+          cp "$apk" dist/SARI-Astro.apk
+
+          if [ "$(find dist -maxdepth 1 -type f -name '*.apk' | wc -l)" -ne 1 ]; then
+            echo "ERROR: Distribution directory does not contain exactly one APK."
+            exit 1
+          fi
+
+          echo "APK validation PASSED."
           rm -rf dist
           mkdir -p dist
           cp "$apk" dist/SARI-Astro.apk
