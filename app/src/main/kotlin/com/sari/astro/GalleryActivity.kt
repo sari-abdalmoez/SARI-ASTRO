@@ -93,7 +93,7 @@ class GalleryActivity : AppCompatActivity() {
 
     private fun addProjectCard(project: ProjectRepository.ProjectInfo, index: Int) {
         val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; background = bg(Color.rgb(15, 21, 30), 16); setPadding(dp(8))
+            orientation = LinearLayout.VERTICAL; background = bg(Color.rgb(15, 21, 30), 16); setPadding(dp(8), dp(8), dp(8), dp(8))
             isClickable = true; isFocusable = true
             setOnClickListener { openProject(project) }
         }
