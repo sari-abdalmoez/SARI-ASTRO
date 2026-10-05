@@ -613,7 +613,15 @@ class MainActivity : AppCompatActivity() {
         opening = false
         writer?.let { w ->
             w.shutdown()
-            try { if (!w.awaitTermination(3, TimeUnit.SECONDS)) w.shutdownNow() } catch (_: InterruptedException) { w.shutdownNow() }
+            try {
+                if (!w.awaitTermination(3, TimeUnit.SECONDS)) {
+                    w.shutdownNow()
+                }
+                Unit
+            } catch (_: InterruptedException) {
+                w.shutdownNow()
+                Unit
+            }
         }
         writer = null
         clearPending()
