@@ -8,6 +8,7 @@ import android.hardware.camera2.TotalCaptureResult
 import android.media.Image
 import android.net.Uri
 import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -185,7 +186,7 @@ object ProjectRepository {
         if (!ok) { file.delete(); return null }
         val iso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
         val exp = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
-        val temp = result.get(CaptureResult.SENSOR_TEMPERATURE)
+        val temp: Float? = null
         File(file.parentFile, file.nameWithoutExtension + ".properties").printWriter().use { out ->
             out.println("type=${type.name}")
             out.println("width=$w")

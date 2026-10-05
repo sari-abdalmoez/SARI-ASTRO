@@ -161,7 +161,7 @@ class ProjectActivity : AppCompatActivity() {
         val input=EditText(this).apply{setSingleLine(true);setText(title.text);selectAll()}
         AlertDialog.Builder(this).setTitle("Rename project").setView(input).setNegativeButton("CANCEL",null).setPositiveButton("SAVE"){_,_->
             val ok=projectDir?.let{ProjectRepository.renameProject(it,input.text.toString())}==true
-            Toast.makeText(this,if(ok)"Project renamed"else"Rename failed",Toast.LENGTH_SHORT).show();if(ok)load()
+            Toast.makeText(this, if (ok) "Project renamed" else "Rename failed", Toast.LENGTH_SHORT).show();if(ok)load()
         }.show()
     }
 

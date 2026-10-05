@@ -66,7 +66,7 @@ class ProcessingActivity : Activity() {
     private fun prepare(){
         if(lights.size<2||w<=0||h<=0){status.text="Not enough frames to stack.";return}
         val d=DeviceProfile.read(this);val mode=NativeCore.recommendMode(d);val plan=NativeCore.planStack(w,h,lights.size,d,mode)
-        status.text="${modeName(mode)} • ${d.totalRam/1048576}MB RAM • ${d.cores} cores\n"+if(plan==null)"Native engine unavailable."else"Tile ${plan.tile}px • ${plan.workers} workers • budget ${plan.budgetMb}MB • peak≈${plan.peakMb}MB"
+        status.text = "${modeName(mode)} • ${d.totalRam / 1048576}MB RAM • ${d.cores} cores\n" + if (plan == null) "Native engine unavailable." else "Tile ${plan.tile}px • ${plan.workers} workers • budget ${plan.budgetMb}MB • peak≈${plan.peakMb}MB"
         if(plan==null||!plan.feasible){status.append("\nThis stack is above the safe memory budget.");return}
         val dir=projectDir ?: ProjectRepository.latestSession(this)?.dir ?: File(filesDir,"projects").apply{mkdirs()}
         output=File(dir,"results/stack-${System.currentTimeMillis()}.f32");output.parentFile?.mkdirs();progress=File(dir,"results/${output.nameWithoutExtension}.progress");report=File(dir,"results/${output.nameWithoutExtension}.report")
@@ -90,7 +90,7 @@ class ProcessingActivity : Activity() {
 
     private fun poll(){ui.postDelayed({
         val line=if(::progress.isInitialized&&progress.exists())progress.readText().trim().split(',')else emptyList()
-        if(line.size>=3){val done=line[0].toIntOrNull()?:0;val total=line[1].toIntOrNull()?:0;val sec=line[2].toDoubleOrNull()?:0.0;bar.progress=if(total>0)done*100/total else 0;val eta=if(done>0&&total>done)sec/done*(total-done)else-1.0;status.text="Stacking $done/$total • elapsed ${fmt(sec)}"+(if(eta>=0)" • ETA ${fmt(eta)}"else"")}
+        if(line.size>=3){val done=line[0].toIntOrNull()?:0;val total=line[1].toIntOrNull()?:0;val sec=line[2].toDoubleOrNull()?:0.0;bar.progress=if(total>0)done*100/total else 0;val eta=if(done>0&&total>done)sec/done*(total-done)else-1.0;status.text = "Stacking $done/$total • elapsed ${fmt(sec)}" + if (eta >= 0) " • ETA ${fmt(eta)}" else ""}
         if(running)poll()
     },500)}
 
