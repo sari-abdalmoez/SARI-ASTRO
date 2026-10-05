@@ -119,6 +119,35 @@ static void writeProgress(const std::string& path,int done,int total,double elap
 static void writeReport(const std::string& path,const PipelineReport&r){
   if(path.empty())return;std::ofstream o(path,std::ios::trunc);if(!o)return;o<<"status="<<r.status<<"\n"<<"frames_input="<<r.framesInput<<"\n"<<"frames_included="<<r.framesIncluded<<"\n"<<"tiles_done="<<r.tilesDone<<"\n"<<"tiles_total="<<r.tilesTotal<<"\n";for(auto&f:r.frames)o<<"frame="<<f.index<<" included="<<(f.included?1:0)<<" stars="<<f.stars<<" fwhm="<<f.fwhm<<" roundness="<<f.roundness<<" noise="<<f.noise<<" snr="<<f.snr<<" score="<<f.score<<" inliers="<<f.inliers<<" rms="<<f.rms<<"\n";
 }
+static Normalization estimatePhotometricNormalization(const BgStats& refBg,const BgStats& tgtBg,
+                                                        const std::vector<Star>& refStars,
+                                                        const std::vector<Star>& tgtStars,
+                                                        const Transform& refToTarget) {
+  Normalization n=estimateNormalization(refBg,tgtBg);
+  std::vector<float> ratios;
+  ratios.reserve(std::min<size_t>(refStars.size(),64));
+  const float minFlux=std::max(0.001f,refBg.noise*4.f);
+  for(const auto& r:refStars){
+    if(!(r.flux>minFlux))continue;
+    double tx,ty;refToTarget.apply(r.x,r.y,tx,ty);
+    float best=std::numeric_limits<float>::max();const Star* match=nullptr;
+    for(const auto& t:tgtStars){double dx=t.x-tx,dy=t.y-ty;float d=(float)std::hypot(dx,dy);if(d<best){best=d;match=&t;}}
+    if(match&&best<=3.5f&&match->flux>std::max(0.001f,tgtBg.noise*4.f)){
+      float q=r.flux/match->flux;
+      if(std::isfinite(q)&&q>0.25f&&q<4.0f)ratios.push_back(q);
+    }
+  }
+  if(!ratios.empty()){
+    const size_t m=ratios.size()/2;std::nth_element(ratios.begin(),ratios.begin()+m,ratios.end());float gain=ratios[m];
+    if(!(gain>0)&&n.gain>0)gain=n.gain;
+    n.gain=std::max(0.5f,std::min(2.0f,gain));
+    n.offset=refBg.median-tgtBg.median*n.gain;
+  }
+  if(!std::isfinite(n.gain)||n.gain<=0)n.gain=1.f;
+  if(!std::isfinite(n.offset))n.offset=0.f;
+  return n;
+}
+
 
 } // namespace anonymous
 
@@ -149,13 +178,14 @@ Status stackProject(const std::vector<std::string>&lightPaths,int W,int H,const 
     frReport[i].index=(int)i;frReport[i].stars=metrics[i].starCount;frReport[i].fwhm=metrics[i].fwhm;frReport[i].roundness=metrics[i].roundness;frReport[i].noise=metrics[i].noise;frReport[i].snr=metrics[i].snr;
   }
   auto scores=scoreFrames(metrics);for(size_t i=0;i<scores.size();++i)frReport[i].score=scores[i];
-  size_t ref=0;while(ref<stars.size()&&stars[ref].empty())++ref;if(ref==stars.size())return Status::NoStars;
+  size_t ref=0;float bestRef=-1.f;for(size_t i=0;i<stars.size();++i)if(metrics[i].valid&&!stars[i].empty()&&scores[i]>bestRef){bestRef=scores[i];ref=i;}if(bestRef<0)return Status::NoStars;
   std::vector<FrameInput> inputs;inputs.reserve(bases.size());
-  for(size_t i=0;i<bases.size();++i){FrameInput f;f.src=(dark||flat||bias)?static_cast<PlaneSource*>(calSources[i].get()):static_cast<PlaneSource*>(bases[i].get());f.include=false;f.t=Transform();f.gain=1.f;f.offset=0.f;f.weight=std::max(.10f,scores[i]/100.f);
-    if(i==ref && !stars[i].empty() && metrics[i].valid){f.include=true;frReport[i].included=true;inputs.push_back(f);out.framesIncluded++;continue;}
-    if(stars[i].size()<3||!metrics[i].valid||scores[i]<=0){inputs.push_back(f);continue;}
+  RegParams rp;rp.maxStars=40;rp.minInliers=8;rp.tol=2.5;rp.scaleTol=0.025;rp.minSep=12.0;
+  for(size_t i=0;i<bases.size();++i){FrameInput f;f.src=(dark||flat||bias)?static_cast<PlaneSource*>(calSources[i].get()):static_cast<PlaneSource*>(bases[i].get());f.include=false;f.t=Transform();f.gain=1.f;f.offset=0.f;f.weight=std::max(.05f,std::pow(std::max(0.f,scores[i])/100.f,1.7f));
+    if(i==ref && metrics[i].valid&&!stars[i].empty()){f.include=true;frReport[i].included=true;f.weight=1.f;inputs.push_back(f);out.framesIncluded++;continue;}
+    if(stars[i].size()<3||!metrics[i].valid||scores[i]<25.f){inputs.push_back(f);continue;}
     std::vector<Star> rs=stars[ref], ts=stars[i];for(auto&x:rs){x.x*=factor;x.y*=factor;}for(auto&x:ts){x.x*=factor;x.y*=factor;}
-    RegResult rr;Status rsx=registerStars(rs,ts,RegParams(),rr);if(rsx==Status::Ok && rr.confidence>=0.25 && rr.rms<3.0){f.t=rr.t;Normalization n=estimateNormalization(bgs[ref],bgs[i]);f.gain=n.gain;f.offset=n.offset;f.include=true;frReport[i].included=true;frReport[i].inliers=rr.inliers;frReport[i].rms=rr.rms;out.framesIncluded++;}
+    RegResult rr;Status rsx=registerStars(rs,ts,rp,rr);if(rsx==Status::Ok && rr.confidence>=0.30 && rr.rms<2.25){f.t=rr.t;Normalization n=estimatePhotometricNormalization(bgs[ref],bgs[i],rs,ts,rr.t);f.gain=n.gain;f.offset=n.offset;f.include=true;frReport[i].included=true;frReport[i].inliers=rr.inliers;frReport[i].rms=rr.rms;out.framesIncluded++;}
     inputs.push_back(f);
   }
   if(out.framesIncluded==0)return Status::RegistrationFailed;
@@ -173,7 +203,17 @@ case 1: return (py==0&&px==1)?0:((py==1&&px==0)?2:1); // GRBG
 case 2: return (py==0&&px==0)?1:((py==1&&px==1)?1:((py==0)?2:0)); // GBRG
 case 3: return (py==0&&px==0)?2:((py==1&&px==1)?0:1); // BGGR
 default:return 1;}}
-static float channelAt(const Plane&p,int cfa,int x,int y,int want){for(int r=0;r<=2;++r){for(int dy=-r;dy<=r;++dy)for(int dx=-r;dx<=r;++dx){if(std::abs(dx)!=r&&std::abs(dy)!=r)continue;int xx=x+dx,yy=y+dy;if(xx>=0&&yy>=0&&xx<p.w&&yy<p.h&&cfaColor(cfa,xx,yy)==want)return rawAt(p,xx,yy);}}return rawAt(p,x,y);}
+static float channelAt(const Plane&p,int cfa,int x,int y,int want){
+  if(cfaColor(cfa,x,y)==want)return rawAt(p,x,y);
+  double sum=0.0,ws=0.0;
+  for(int dy=-2;dy<=2;++dy)for(int dx=-2;dx<=2;++dx){
+    if(dx==0&&dy==0)continue; int xx=x+dx,yy=y+dy;
+    if(xx<0||yy<0||xx>=p.w||yy>=p.h||cfaColor(cfa,xx,yy)!=want)continue;
+    float v=rawAt(p,xx,yy);if(!std::isfinite(v))continue;
+    float w=1.0f/(1.0f+float(dx*dx+dy*dy)); sum+=double(w)*v;ws+=w;
+  }
+  return ws>0.0?float(sum/ws):rawAt(p,x,y);
+}
 static float stretchValue(float v,float lo,float hi,float amount){if(!(hi>lo))return 0.f;float x=std::max(0.f,std::min(1.f,(v-lo)/(hi-lo)));float a=std::max(.1f,amount);return std::asinh(a*x)/std::asinh(a);}
 Status renderPreview(const std::string&f32Path,int W,int H,int cfa,int mode,float stretch,int maxDim,std::vector<uint8_t>&rgba,int&outW,int&outH){F32FileSource src(f32Path.c_str(),W,H);if(!src.ok())return Status::IoError;if(W<=0||H<=0)return Status::InvalidArgument;int factor=std::max(1,(std::max(W,H)+maxDim-1)/maxDim);if(factor>1&&factor&1)++factor;outW=(W+factor-1)/factor;outH=(H+factor-1)/factor;Plane p(outW,outH);std::vector<float>row(W*std::min(H,64));for(int oy=0;oy<outH;oy+=64){int hh=std::min(64,outH-oy);int sy=oy*factor;int rh=std::min(H-sy,std::max(1,hh*factor));row.resize((size_t)W*rh);Status s=src.readRegion(0,sy,W,rh,row.data());if(s!=Status::Ok)return s;for(int y=0;y<hh;++y){int rawY=std::min(H-1,(oy+y)*factor);for(int x=0;x<outW;++x){int rawX=std::min(W-1,x*factor);p.at(x,oy+y)=row[(size_t)(rawY-sy)*W+(rawX)];}}}
   std::vector<float> sample;sample.reserve(65536);for(int y=0;y<p.h;y+=std::max(1,p.h/256))for(int x=0;x<p.w;x+=std::max(1,p.w/256)){float v=p.at(x,y);if(std::isfinite(v))sample.push_back(v);if(sample.size()>=65536)break;}if(sample.empty())return Status::InvalidArgument;auto q=[&](double qv){std::vector<float>a=sample;size_t k=(size_t)std::min<double>(a.size()-1,qv*(a.size()-1));std::nth_element(a.begin(),a.begin()+k,a.end());return a[k];};float lo=q(.005),hi=q(.995);if(!(hi>lo))hi=lo+1e-3f;

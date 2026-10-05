@@ -11,7 +11,7 @@ add_compile_options(-Wall -Wextra -fvisibility=hidden)
 add_library(sari_core STATIC
   io/image.cpp stars/stars.cpp registration/registration.cpp
   stacking/stacking.cpp quality/quality.cpp memory/budget.cpp
-  pipeline/pipeline.cpp)
+  pipeline/pipeline.cpp export/export.cpp)
 target_include_directories(sari_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 find_package(Threads REQUIRED)
 target_link_libraries(sari_core PUBLIC Threads::Threads)

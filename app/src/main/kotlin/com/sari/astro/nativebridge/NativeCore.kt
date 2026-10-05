@@ -28,6 +28,11 @@ object NativeCore {
         return StackResult(a[0],a[1],a[2],a[3],a[4])
     }
     fun cancelStack() { if (available) runCatching { nativeCancelStack() } }
+    fun exportFullPng(path:String,w:Int,h:Int,cfa:Int,mode:Int,stretch:Float,denoise:Float,output:String):Int {
+        if (!available) return 5
+        return runCatching { nativeExportFullPng(path,w,h,cfa,mode,stretch,denoise,output) }.getOrDefault(5)
+    }
+
     fun renderPreview(path:String,w:Int,h:Int,cfa:Int,mode:Int,stretch:Float,maxDim:Int=1600): Preview? {
         if (!available) return null
         val a=runCatching { nativeRenderPreview(path,w,h,cfa,mode,stretch,maxDim) }.getOrNull() ?: return null
@@ -41,5 +46,6 @@ object NativeCore {
     @JvmStatic private external fun nativeRecommendMode(total:Long,avail:Long,cores:Int,thermal:Int):Int
     @JvmStatic private external fun nativeStackProject(lights:Array<String>,w:Int,h:Int,dark:String?,flat:String?,bias:String?,output:String,progress:String,report:String,tile:Int,workers:Int,startTile:Int):IntArray?
     @JvmStatic private external fun nativeCancelStack()
+    @JvmStatic private external fun nativeExportFullPng(path:String,w:Int,h:Int,cfa:Int,mode:Int,stretch:Float,denoise:Float,output:String):Int
     @JvmStatic private external fun nativeRenderPreview(path:String,w:Int,h:Int,cfa:Int,mode:Int,stretch:Float,maxDim:Int):ByteArray?
 }

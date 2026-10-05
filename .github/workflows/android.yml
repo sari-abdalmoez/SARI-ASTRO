@@ -13,7 +13,7 @@ jobs:
           cd native
           g++ -std=c++17 -O1 -g -Wall -Wextra -fsanitize=address,undefined -pthread \
             io/image.cpp stars/stars.cpp registration/registration.cpp stacking/stacking.cpp \
-            quality/quality.cpp memory/budget.cpp pipeline/pipeline.cpp tests/test_main.cpp -o /tmp/sari_tests
+            quality/quality.cpp memory/budget.cpp pipeline/pipeline.cpp export/export.cpp tests/test_main.cpp -o /tmp/sari_tests
           /tmp/sari_tests
   android:
     needs: native-tests

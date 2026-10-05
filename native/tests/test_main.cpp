@@ -3,6 +3,7 @@
 #include <random>
 #include "../memory/budget.h"
 #include "../memory/progress.h"
+#include "../export/export.h"
 #include "../quality/quality.h"
 #include "../stacking/stacking.h"
 using namespace sari;
@@ -80,4 +81,28 @@ static void testBudget() {
 static void testQuality() {
   std::printf("[quality]\n"); auto sky = makeSky(256, 256, 50, 7); std::vector<FrameMetrics> m; m.push_back(computeMetrics(render(256, 256, sky, Transform(), 0.01f, 1))); m.push_back(computeMetrics(render(256, 256, sky, Transform(), 0.08f, 2))); m.push_back(computeMetrics(Plane(256, 256, 0.2f))); m.push_back(computeMetrics(Plane())); auto sc = scoreFrames(m); CHECK(sc[0] > sc[1] && sc[2] == 0 && sc[3] == 0 && !m[2].valid, "ranking"); Normalization n = estimateNormalization({0.05f, 0.01f}, {0.3f, 0.02f}); CHECK(std::fabs(n.gain - 0.5f) < 1e-6f && std::fabs(0.3f * n.gain + n.offset - 0.05f) < 1e-6f, "norm");
 }
-int main() { testStarsAndRegistration(); testStacking(); testRejection(); testTilingResumeCancel(); testFileSource(); testBudget(); testQuality(); std::printf(g_fail ? "\n%d FAILURES\n" : "\nALL TESTS PASSED\n", g_fail); return g_fail ? 1 : 0; }
+
+static void testFullExport() {
+  std::printf("[full-resolution export]\n");
+  Plane p(64, 48, 0.04f);
+  for (int y = 0; y < p.h; ++y) for (int x = 0; x < p.w; ++x) {
+    float dx = float(x - 31), dy = float(y - 23);
+    p.at(x,y) += 0.7f * std::exp(-(dx*dx + dy*dy) / 18.f);
+  }
+  const char* f32 = "/tmp/sari_export_test.f32";
+  const char* png = "/tmp/sari_export_test.png";
+  CHECK(writeF32File(f32, p) == Status::Ok, "export source");
+  CHECK(exportFullPng(f32, p.w, p.h, 0, 1, 3.f, .25f, png) == Status::Ok, "full png");
+  FILE* f = std::fopen(png, "rb");
+  CHECK(f != nullptr, "png exists");
+  if (f) {
+    unsigned char h[29] = {};
+    CHECK(std::fread(h, 1, sizeof(h), f) == sizeof(h), "png header read");
+    CHECK(h[0] == 137 && h[1] == 80 && h[2] == 78 && h[3] == 71, "png signature");
+    CHECK(h[24] == 16 && h[25] == 2, "png is 16-bit RGB");
+    std::fclose(f);
+  }
+  std::remove(f32); std::remove(png);
+}
+
+int main() { testStarsAndRegistration(); testStacking(); testRejection(); testTilingResumeCancel(); testFileSource(); testBudget(); testQuality(); testFullExport(); std::printf(g_fail ? "\n%d FAILURES\n" : "\nALL TESTS PASSED\n", g_fail); return g_fail ? 1 : 0; }

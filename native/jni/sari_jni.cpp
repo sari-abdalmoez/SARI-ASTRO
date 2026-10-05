@@ -9,6 +9,7 @@
 #include "../memory/budget.h"
 #include "../stars/stars.h"
 #include "../pipeline/pipeline.h"
+#include "../export/export.h"
 #define TAG "SariNative"
 using namespace sari;
 namespace { std::atomic<bool> g_cancel{false}; }
@@ -32,6 +33,10 @@ JNIEXPORT jfloatArray JNICALL Java_com_sari_astro_nativebridge_NativeCore_native
   try{if(!data||w<=0||h<=0)return nullptr;if((jlong)env->GetArrayLength(data)!=(jlong)w*h)return nullptr;Plane p(w,h);env->GetFloatArrayRegion(data,0,w*h,p.d.data());if(env->ExceptionCheck())return nullptr;std::vector<Star>s;Status st=detectStars(p,StarParams(),s);if(st!=Status::Ok&&st!=Status::NoStars)return nullptr;std::vector<float>f;f.reserve(s.size()*4);for(auto&x:s){f.push_back(x.x);f.push_back(x.y);f.push_back(x.flux);f.push_back(x.fwhm);}jfloatArray out=env->NewFloatArray((jsize)f.size());if(!out)return nullptr;if(!f.empty())env->SetFloatArrayRegion(out,0,(jsize)f.size(),f.data());return out;}catch(...){return nullptr;}
 }
 JNIEXPORT void JNICALL Java_com_sari_astro_nativebridge_NativeCore_nativeCancelStack(JNIEnv*,jclass){g_cancel.store(true,std::memory_order_release);}
+JNIEXPORT jint JNICALL Java_com_sari_astro_nativebridge_NativeCore_nativeExportFullPng(JNIEnv* env,jclass,jstring path,jint w,jint h,jint cfa,jint mode,jfloat stretch,jfloat denoise,jstring output){
+  try{std::string p,o;if(!getString(env,path,p,false)||!getString(env,output,o,false))return (jint)Status::InvalidArgument;return (jint)exportFullPng(p,w,h,cfa,mode,stretch,denoise,o);}catch(...){return (jint)Status::IoError;}
+}
+
 JNIEXPORT jintArray JNICALL Java_com_sari_astro_nativebridge_NativeCore_nativeStackProject(JNIEnv* env,jclass,jobjectArray lights,jint w,jint h,jstring dark,jstring flat,jstring bias,jstring output,jstring progress,jstring report,jint tile,jint workers,jint startTile){
   g_cancel.store(false,std::memory_order_release);try{
     std::vector<std::string>lp;std::string dp,fp,bp,op,pp,rp;if(!getStringArray(env,lights,lp)||!getString(env,dark,dp)||!getString(env,flat,fp)||!getString(env,bias,bp)||!getString(env,output,op,false)||!getString(env,progress,pp)||!getString(env,report,rp))return nullptr;
