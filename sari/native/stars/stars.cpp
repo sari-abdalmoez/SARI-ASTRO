@@ -58,11 +58,12 @@ Status detectStars(const Plane& p, const StarParams& prm, std::vector<Star>& out
   BgGrid bg(p, prm.bgBlock);
   const int R = 4; const float thr = prm.sigma * bs.noise;
   std::vector<Star> cand;
-  cand.reserve(prm.maxStars * 2);
+  const size_t keep = static_cast<size_t>(prm.maxStars);
+  cand.reserve(std::min<size_t>(keep * 2, 1u << 16));
   // Memory-safe local-maximum pass: no full-frame smoothed Plane is allocated.
   for (int y = R; y < p.h - R; ++y) for (int x = R; x < p.w - R; ++x) {
     float center = p.at(x, y); if (!std::isfinite(center)) continue;
-    if (center - bg.at(x + .5f, y + .5f) < thr) continue;
+    // Cheap strict local-maximum test first (rejects ~90% of pixels); the bilinear background lookup comes after.
     bool mx = true;
     for (int j = -1; j <= 1 && mx; ++j) for (int i = -1; i <= 1; ++i) {
       if (!i && !j) continue;
@@ -70,6 +71,7 @@ Status detectStars(const Plane& p, const StarParams& prm, std::vector<Star>& out
       if (!std::isfinite(v) || v >= center) { mx = false; break; }
     }
     if (!mx) continue;
+    if (center - bg.at(x + .5f, y + .5f) < thr) continue;
     double sw = 0, sx = 0, sy = 0, mxx = 0, myy = 0; float peak = center;
     for (int j = -R; j <= R; ++j) for (int i = -R; i <= R; ++i) {
       float raw = p.at(x + i, y + j); if (!std::isfinite(raw)) continue;
@@ -90,6 +92,12 @@ Status detectStars(const Plane& p, const StarParams& prm, std::vector<Star>& out
     if (fwhm < 1.2f || fwhm > 20.f) continue;
     cand.push_back({static_cast<float>(x + cx + .5), static_cast<float>(y + cy + .5), static_cast<float>(sw), fwhm,
                     static_cast<float>(std::min(sxg, syg) / std::max(sxg, syg)), peak});
+    // Bound memory on very noisy frames: periodically keep only the brightest candidates.
+    if (cand.size() >= keep * 8 + 64) {
+      std::nth_element(cand.begin(), cand.begin() + keep, cand.end(),
+                       [](const Star& a, const Star& b) { return a.flux > b.flux; });
+      cand.resize(keep);
+    }
   }
   if (cand.empty()) return Status::NoStars;
   std::sort(cand.begin(), cand.end(), [](const Star& a, const Star& b) { return a.flux > b.flux; });

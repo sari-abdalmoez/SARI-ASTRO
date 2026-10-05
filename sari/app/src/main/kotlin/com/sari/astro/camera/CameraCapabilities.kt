@@ -49,6 +49,7 @@ object CameraProbe {
                     val exp = c.get(CC.SENSOR_INFO_EXPOSURE_TIME_RANGE)
                     val iso = c.get(CC.SENSOR_INFO_SENSITIVITY_RANGE)
                     val minFocus = c.get(CC.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
+                    val afModes = c.get(CC.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
                     CameraCaps(
                         id = id,
                         facingBack = c.get(CC.LENS_FACING) == CC.LENS_FACING_BACK,
@@ -57,7 +58,7 @@ object CameraProbe {
                         rawSizes = raw,
                         exposureNs = exp?.let { it.lower..it.upper },
                         isoRange = iso?.let { it.lower..it.upper },
-                        manualFocus = minFocus > 0f && CC.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR in caps,
+                        manualFocus = minFocus > 0f && CC.CONTROL_AF_MODE_OFF in afModes && CC.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR in caps,
                         minFocusDiopters = minFocus,
                         focalLengthsMm = c.get(CC.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.toList().orEmpty(),
                         activeArray = c.get(CC.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?.let { "${it.width()}x${it.height()}" },
