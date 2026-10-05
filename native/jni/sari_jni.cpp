@@ -40,7 +40,22 @@ JNIEXPORT jint JNICALL Java_com_sari_astro_nativebridge_NativeCore_nativeExportF
 JNIEXPORT jint JNICALL Java_com_sari_astro_nativebridge_NativeCore_nativeExportLinearFits(JNIEnv* env,jclass,jstring path,jint w,jint h,jint cfa,jstring output){
   try{std::string p,o;if(!getString(env,path,p,false)||!getString(env,output,o,false))return (jint)Status::InvalidArgument;return (jint)exportLinearFits(p,w,h,cfa,o);}catch(...){return (jint)Status::IoError;}
 }
-\n\1JNIEnv* env,jclass,jobjectArray lights,jint w,jint h,jstring dark,jstring flat,jstring bias,jstring output,jstring progress,jstring report,jint tile,jint workers,jint startTile){
+JNIEXPORT jintArray JNICALL Java_com_sari_astro_nativebridge_NativeCore_nativeStackProject(
+    JNIEnv* env,
+    jclass,
+    jobjectArray lights,
+    jint w,
+    jint h,
+    jstring dark,
+    jstring flat,
+    jstring bias,
+    jstring output,
+    jstring progress,
+    jstring report,
+    jint tile,
+    jint workers,
+    jint startTile
+){
   g_cancel.store(false,std::memory_order_release);try{
     std::vector<std::string>lp;std::string dp,fp,bp,op,pp,rp;if(!getStringArray(env,lights,lp)||!getString(env,dark,dp)||!getString(env,flat,fp)||!getString(env,bias,bp)||!getString(env,output,op,false)||!getString(env,progress,pp)||!getString(env,report,rp))return nullptr;
     PipelineReport pr;Status st=stackProject(lp,w,h,dp,fp,bp,op,pp,rp,tile,workers,startTile,[&](int,int){return !g_cancel.load(std::memory_order_acquire);},pr);g_cancel.store(false,std::memory_order_release);
