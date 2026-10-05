@@ -117,7 +117,9 @@ static void writeProgress(const std::string& path,int done,int total,double elap
   if(path.empty())return;std::ofstream o(path,std::ios::trunc);if(o)o<<done<<","<<total<<","<<elapsed<<"\n";
 }
 static void writeReport(const std::string& path,const PipelineReport&r){
-  if(path.empty())return;std::ofstream o(path,std::ios::trunc);if(!o)return;o<<"status="<<r.status<<"\n"<<"frames_input="<<r.framesInput<<"\n"<<"frames_included="<<r.framesIncluded<<"\n"<<"tiles_done="<<r.tilesDone<<"\n"<<"tiles_total="<<r.tilesTotal<<"\n";for(auto&f:r.frames)o<<"frame="<<f.index<<" included="<<(f.included?1:0)<<" stars="<<f.stars<<" fwhm="<<f.fwhm<<" roundness="<<f.roundness<<" noise="<<f.noise<<" snr="<<f.snr<<" score="<<f.score<<" inliers="<<f.inliers<<" rms="<<f.rms<<"\n";
+  if(path.empty())return;std::ofstream o(path,std::ios::trunc);if(!o)return;
+  o<<"status="<<r.status<<"\n"<<"frames_input="<<r.framesInput<<"\n"<<"frames_included="<<r.framesIncluded<<"\n"<<"tiles_done="<<r.tilesDone<<"\n"<<"tiles_total="<<r.tilesTotal<<"\n";
+  for(auto&f:r.frames)o<<"frame="<<f.index<<" included="<<(f.included?1:0)<<" reason="<<f.reason<<" stars="<<f.stars<<" fwhm="<<f.fwhm<<" roundness="<<f.roundness<<" noise="<<f.noise<<" snr="<<f.snr<<" score="<<f.score<<" inliers="<<f.inliers<<" rms="<<f.rms<<"\n";
 }
 static Normalization estimatePhotometricNormalization(const BgStats& refBg,const BgStats& tgtBg,
                                                         const std::vector<Star>& refStars,
@@ -180,12 +182,17 @@ Status stackProject(const std::vector<std::string>&lightPaths,int W,int H,const 
   auto scores=scoreFrames(metrics);for(size_t i=0;i<scores.size();++i)frReport[i].score=scores[i];
   size_t ref=0;float bestRef=-1.f;for(size_t i=0;i<stars.size();++i)if(metrics[i].valid&&!stars[i].empty()&&scores[i]>bestRef){bestRef=scores[i];ref=i;}if(bestRef<0)return Status::NoStars;
   std::vector<FrameInput> inputs;inputs.reserve(bases.size());
-  RegParams rp;rp.maxStars=40;rp.minInliers=8;rp.tol=2.5;rp.scaleTol=0.025;rp.minSep=12.0;
+  RegParams rp;rp.maxStars=48;rp.minInliers=8;rp.tol=2.0;rp.scaleTol=0.02;rp.minSep=14.0;
   for(size_t i=0;i<bases.size();++i){FrameInput f;f.src=(dark||flat||bias)?static_cast<PlaneSource*>(calSources[i].get()):static_cast<PlaneSource*>(bases[i].get());f.include=false;f.t=Transform();f.gain=1.f;f.offset=0.f;f.weight=std::max(.05f,std::pow(std::max(0.f,scores[i])/100.f,1.7f));
-    if(i==ref && metrics[i].valid&&!stars[i].empty()){f.include=true;frReport[i].included=true;f.weight=1.f;inputs.push_back(f);out.framesIncluded++;continue;}
-    if(stars[i].size()<3||!metrics[i].valid||scores[i]<25.f){inputs.push_back(f);continue;}
+    if(i==ref && metrics[i].valid&&!stars[i].empty()){f.include=true;frReport[i].included=true;frReport[i].reason="reference";f.weight=1.f;inputs.push_back(f);out.framesIncluded++;continue;}
+    if(stars[i].size()<3){frReport[i].reason="not-enough-stars";inputs.push_back(f);continue;}
+    if(!metrics[i].valid||scores[i]<25.f){frReport[i].reason="low-quality";inputs.push_back(f);continue;}
     std::vector<Star> rs=stars[ref], ts=stars[i];for(auto&x:rs){x.x*=factor;x.y*=factor;}for(auto&x:ts){x.x*=factor;x.y*=factor;}
-    RegResult rr;Status rsx=registerStars(rs,ts,rp,rr);if(rsx==Status::Ok && rr.confidence>=0.30 && rr.rms<2.25){f.t=rr.t;Normalization n=estimatePhotometricNormalization(bgs[ref],bgs[i],rs,ts,rr.t);f.gain=n.gain;f.offset=n.offset;f.include=true;frReport[i].included=true;frReport[i].inliers=rr.inliers;frReport[i].rms=rr.rms;out.framesIncluded++;}
+    RegResult rr;Status rsx=registerStars(rs,ts,rp,rr);
+    if(rsx!=Status::Ok){frReport[i].reason="registration-failed";inputs.push_back(f);continue;}
+    frReport[i].inliers=rr.inliers;frReport[i].rms=rr.rms;
+    if(rr.confidence<0.35 || rr.rms>1.75){frReport[i].reason=rr.rms>1.75?"registration-rms-too-high":"registration-confidence-low";inputs.push_back(f);continue;}
+    f.t=rr.t;Normalization n=estimatePhotometricNormalization(bgs[ref],bgs[i],rs,ts,rr.t);f.gain=n.gain;f.offset=n.offset;f.include=true;frReport[i].included=true;frReport[i].reason="ok";out.framesIncluded++;
     inputs.push_back(f);
   }
   if(out.framesIncluded==0)return Status::RegistrationFailed;
@@ -204,15 +211,24 @@ case 2: return (py==0&&px==0)?1:((py==1&&px==1)?1:((py==0)?2:0)); // GBRG
 case 3: return (py==0&&px==0)?2:((py==1&&px==1)?0:1); // BGGR
 default:return 1;}}
 static float channelAt(const Plane&p,int cfa,int x,int y,int want){
-  if(cfaColor(cfa,x,y)==want)return rawAt(p,x,y);
-  double sum=0.0,ws=0.0;
-  for(int dy=-2;dy<=2;++dy)for(int dx=-2;dx<=2;++dx){
-    if(dx==0&&dy==0)continue; int xx=x+dx,yy=y+dy;
-    if(xx<0||yy<0||xx>=p.w||yy>=p.h||cfaColor(cfa,xx,yy)!=want)continue;
-    float v=rawAt(p,xx,yy);if(!std::isfinite(v))continue;
-    float w=1.0f/(1.0f+float(dx*dx+dy*dy)); sum+=double(w)*v;ws+=w;
+  const int here=cfaColor(cfa,x,y); const float c=rawAt(p,x,y);
+  if(here==want)return c;
+  auto clamp=[](float v){return std::max(0.f,std::min(1.f,v));};
+  if(want==1 && here!=1){
+    const float l=rawAt(p,x-1,y),r=rawAt(p,x+1,y),u=rawAt(p,x,y-1),d=rawAt(p,x,y+1);
+    const float l2=rawAt(p,x-2,y),r2=rawAt(p,x+2,y),u2=rawAt(p,x,y-2),d2=rawAt(p,x,y+2);
+    const float gh=.5f*(l+r)+.25f*(2.f*c-l2-r2);
+    const float gv=.5f*(u+d)+.25f*(2.f*c-u2-d2);
+    const float gradH=std::fabs(l-r)+.5f*std::fabs(l2-r2);
+    const float gradV=std::fabs(u-d)+.5f*std::fabs(u2-d2);
+    return clamp(gradH<=gradV?gh:gv);
   }
-  return ws>0.0?float(sum/ws):rawAt(p,x,y);
+  if(here==1){
+    bool horizontal=cfaColor(cfa,x-1,y)==want || cfaColor(cfa,x+1,y)==want;
+    const float a=horizontal?0.5f*(rawAt(p,x-1,y)+rawAt(p,x+1,y)):0.5f*(rawAt(p,x,y-1)+rawAt(p,x,y+1));
+    return clamp(a);
+  }
+  return clamp(.25f*(rawAt(p,x-1,y-1)+rawAt(p,x+1,y-1)+rawAt(p,x-1,y+1)+rawAt(p,x+1,y+1)));
 }
 static float stretchValue(float v,float lo,float hi,float amount){if(!(hi>lo))return 0.f;float x=std::max(0.f,std::min(1.f,(v-lo)/(hi-lo)));float a=std::max(.1f,amount);return std::asinh(a*x)/std::asinh(a);}
 Status renderPreview(const std::string&f32Path,int W,int H,int cfa,int mode,float stretch,int maxDim,std::vector<uint8_t>&rgba,int&outW,int&outH){F32FileSource src(f32Path.c_str(),W,H);if(!src.ok())return Status::IoError;if(W<=0||H<=0)return Status::InvalidArgument;int factor=std::max(1,(std::max(W,H)+maxDim-1)/maxDim);if(factor>1&&factor&1)++factor;outW=(W+factor-1)/factor;outH=(H+factor-1)/factor;Plane p(outW,outH);std::vector<float>row(W*std::min(H,64));for(int oy=0;oy<outH;oy+=64){int hh=std::min(64,outH-oy);int sy=oy*factor;int rh=std::min(H-sy,std::max(1,hh*factor));row.resize((size_t)W*rh);Status s=src.readRegion(0,sy,W,rh,row.data());if(s!=Status::Ok)return s;for(int y=0;y<hh;++y){int rawY=std::min(H-1,(oy+y)*factor);for(int x=0;x<outW;++x){int rawX=std::min(W-1,x*factor);p.at(x,oy+y)=row[(size_t)(rawY-sy)*W+(rawX)];}}}

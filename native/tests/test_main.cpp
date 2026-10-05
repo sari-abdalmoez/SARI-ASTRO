@@ -79,7 +79,7 @@ static void testBudget() {
   std::printf("[memory budget]\n"); const uint64_t GB = 1ull << 30; DeviceInfo low{2 * GB, 1 * GB, 8, 0}; PerfMode m = recommendMode(low); CHECK(m == PerfMode::Safe, "low-end -> safe"); StackPlan p = planStack(4000, 3000, 100, low, m); CHECK(p.feasible && p.peakBytes <= p.budgetBytes && p.workers <= 2 && p.tile >= 64, "plan"); DeviceInfo hot = low; hot.thermalLevel = 3; CHECK(planStack(4000, 3000, 100, hot, m).workers == 1, "thermal throttle"); DeviceInfo tiny{1 * GB, 100ull << 20, 4, 0}; CHECK(!planStack(8000, 6000, 2000, tiny, PerfMode::Safe).feasible, "infeasible"); DeviceInfo big{12 * GB, 8 * GB, 8, 0}; StackPlan pb = planStack(4000, 3000, 100, big, PerfMode::Pro); CHECK(pb.tile >= p.tile && pb.workers > p.workers, "pro uses more"); ProgressTracker pt(100); pt.start(0); pt.update(10, 1); CHECK(std::fabs(pt.etaSeconds() - 9.0) < 1e-6, "eta1"); pt.update(20, 3); CHECK(pt.etaSeconds() > 9.0 && pt.etaSeconds() < 16.0, "eta adapts"); ProgressTracker z(0); CHECK(z.fraction() == 0, "zero total");
 }
 static void testQuality() {
-  std::printf("[quality]\n"); auto sky = makeSky(256, 256, 50, 7); std::vector<FrameMetrics> m; m.push_back(computeMetrics(render(256, 256, sky, Transform(), 0.01f, 1))); m.push_back(computeMetrics(render(256, 256, sky, Transform(), 0.08f, 2))); m.push_back(computeMetrics(Plane(256, 256, 0.2f))); m.push_back(computeMetrics(Plane())); auto sc = scoreFrames(m); CHECK(sc[0] > sc[1] && sc[2] == 0 && sc[3] == 0 && !m[2].valid, "ranking"); Normalization n = estimateNormalization({0.05f, 0.01f}, {0.3f, 0.02f}); CHECK(std::fabs(n.gain - 0.5f) < 1e-6f && std::fabs(0.3f * n.gain + n.offset - 0.05f) < 1e-6f, "norm");
+  std::printf("[quality]\n"); auto sky = makeSky(256, 256, 50, 7); std::vector<FrameMetrics> m; m.push_back(computeMetrics(render(256, 256, sky, Transform(), 0.01f, 1))); m.push_back(computeMetrics(render(256, 256, sky, Transform(), 0.08f, 2))); m.push_back(computeMetrics(Plane(256, 256, 0.2f))); m.push_back(computeMetrics(Plane())); auto sc = scoreFrames(m); CHECK(sc[0] > sc[1] && sc[2] == 0 && sc[3] == 0 && !m[2].valid, "ranking"); Normalization n = estimateNormalization({0.05f, 0.01f}, {0.3f, 0.02f}); CHECK(std::fabs(n.gain - 1.0f) < 1e-6f && std::fabs(0.3f * n.gain + n.offset - 0.05f) < 1e-6f, "photometric fallback");
 }
 
 static void testFullExport() {
@@ -91,8 +91,10 @@ static void testFullExport() {
   }
   const char* f32 = "/tmp/sari_export_test.f32";
   const char* png = "/tmp/sari_export_test.png";
+  const char* fits = "/tmp/sari_export_test.fits";
   CHECK(writeF32File(f32, p) == Status::Ok, "export source");
   CHECK(exportFullPng(f32, p.w, p.h, 0, 1, 3.f, .25f, png) == Status::Ok, "full png");
+  CHECK(exportLinearFits(f32, p.w, p.h, 0, fits) == Status::Ok, "linear fits");
   FILE* f = std::fopen(png, "rb");
   CHECK(f != nullptr, "png exists");
   if (f) {
@@ -102,7 +104,8 @@ static void testFullExport() {
     CHECK(h[24] == 16 && h[25] == 2, "png is 16-bit RGB");
     std::fclose(f);
   }
-  std::remove(f32); std::remove(png);
+  FILE* ff = std::fopen(fits, "rb"); CHECK(ff != nullptr, "fits exists"); if (ff) { char hdr[81] = {}; CHECK(std::fread(hdr,1,80,ff) == 80, "fits header read"); CHECK(std::string(hdr,8) == "SIMPLE  ", "fits SIMPLE card"); std::fseek(ff,0,SEEK_END); long fs = std::ftell(ff); CHECK(fs % 2880 == 0, "fits 2880-byte blocks"); std::fclose(ff); }
+  std::remove(f32); std::remove(png); std::remove(fits);
 }
 
 int main() { testStarsAndRegistration(); testStacking(); testRejection(); testTilingResumeCancel(); testFileSource(); testBudget(); testQuality(); testFullExport(); std::printf(g_fail ? "\n%d FAILURES\n" : "\nALL TESTS PASSED\n", g_fail); return g_fail ? 1 : 0; }

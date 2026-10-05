@@ -5,6 +5,7 @@
 #include <fstream>
 #include <limits>
 #include <vector>
+#include <cstring>
 
 namespace sari {
 namespace {
@@ -138,6 +139,18 @@ static void writeStoredIdat(std::ostream& out,const std::vector<uint8_t>&data,bo
     std::vector<uint8_t> payload;payload.reserve(data.size()+7);if(first){payload.push_back(0x78);payload.push_back(0x01);}uint16_t len=(uint16_t)data.size(),nlen=(uint16_t)~len;payload.push_back(0x00);payload.push_back((uint8_t)len);payload.push_back((uint8_t)(len>>8));payload.push_back((uint8_t)nlen);payload.push_back((uint8_t)(nlen>>8));payload.insert(payload.end(),data.begin(),data.end());writeChunk(out,"IDAT",payload);
 }
 
+
+static void fitsCard(std::ostream&out,const std::string&key,const std::string&value){
+    if(key=="END"){std::string s="END";s.append(77,' ');out.write(s.data(),80);return;}
+    std::string s=key;s.resize(8,' ');s+="= ";s+=value;if(s.size()<80)s.append(80-s.size(),' ');else if(s.size()>80)s.resize(80);out.write(s.data(),80);
+}
+static void fitsComment(std::ostream&out,const std::string&text){
+    std::string s="COMMENT ";s+=text;if(s.size()<80)s.append(80-s.size(),' ');else if(s.size()>80)s.resize(80);out.write(s.data(),80);
+}
+static void fitsPad(std::ostream&out,std::streamoff bytes,char fill){const std::streamoff rem=bytes%2880;if(rem){std::vector<char>z(static_cast<size_t>(2880-rem),fill);out.write(z.data(),z.size());}}
+static std::string cfaName(int cfa){switch(cfa&3){case 0:return "RGGB";case 1:return "GRBG";case 2:return "GBRG";case 3:return "BGGR";default:return "UNKNOWN";}}
+static void beFloat(std::ostream&out,float v){uint32_t u=0;std::memcpy(&u,&v,4);const uint8_t b[4]={uint8_t(u>>24),uint8_t(u>>16),uint8_t(u>>8),uint8_t(u)};out.write(reinterpret_cast<const char*>(b),4);}
+
 } // namespace
 
 Status exportFullPng(const std::string&f32Path,int W,int H,int cfa,int mode,float stretch,float denoiseStrength,const std::string&outputPath){
@@ -154,6 +167,20 @@ Status exportFullPng(const std::string&f32Path,int W,int H,int cfa,int mode,floa
         }
     }
     std::vector<uint8_t>fin={0x01,0x00,0x00,0xff,0xff,(uint8_t)(adler>>24),(uint8_t)(adler>>16),(uint8_t)(adler>>8),(uint8_t)adler};writeChunk(out,"IDAT",fin);writeChunk(out,"IEND",{});return out.good()?Status::Ok:Status::IoError;
+}
+
+
+Status exportLinearFits(const std::string&f32Path,int W,int H,int cfa,const std::string&outputPath){
+    if(f32Path.empty()||outputPath.empty()||W<=0||H<=0)return Status::InvalidArgument;
+    F32FileSource src(f32Path.c_str(),W,H);if(!src.ok())return Status::IoError;
+    std::ofstream out(outputPath,std::ios::binary|std::ios::trunc);if(!out)return Status::IoError;
+    fitsCard(out,"SIMPLE","  T");fitsCard(out,"BITPIX","  -32");fitsCard(out,"NAXIS","  2");
+    fitsCard(out,"NAXIS1",std::string(" ")+std::to_string(W));fitsCard(out,"NAXIS2",std::string(" ")+std::to_string(H));
+    fitsCard(out,"BSCALE","  1.0");fitsCard(out,"BZERO","  0.0");fitsCard(out,"CFA","'"+cfaName(cfa)+"'");fitsCard(out,"ORIGIN","'SARI ASTRO'");
+    fitsComment(out,"Linear stacked Bayer master; no demosaic or stretch applied.");fitsCard(out,"END","");fitsPad(out,out.tellp(),' ');
+    std::vector<float>row(static_cast<size_t>(W));
+    for(int y=0;y<H;++y){if(src.readRegion(0,y,W,1,row.data())!=Status::Ok)return Status::IoError;for(int x=0;x<W;++x)beFloat(out,row[x]);}
+    fitsPad(out,out.tellp(),'\0');return out.good()?Status::Ok:Status::IoError;
 }
 
 } // namespace sari

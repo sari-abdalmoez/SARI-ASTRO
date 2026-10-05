@@ -6,7 +6,7 @@
 #include "../core/image.h"
 namespace sari {
 struct PipelineFrameReport {
-  int index=0; bool included=false; int stars=0; float fwhm=0,roundness=0,noise=0,snr=0,score=0; int inliers=0; double rms=0;
+  int index=0; bool included=false; int stars=0; float fwhm=0,roundness=0,noise=0,snr=0,score=0; int inliers=0; double rms=0; std::string reason;
 };
 struct PipelineReport { int status=0,framesInput=0,framesIncluded=0,tilesDone=0,tilesTotal=0; std::vector<PipelineFrameReport> frames; };
 Status stackProject(const std::vector<std::string>& lightPaths,

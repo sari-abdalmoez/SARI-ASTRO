@@ -16,36 +16,44 @@ object NativeCore {
     fun version(): String = if (available) runCatching { nativeVersion() }.getOrDefault("native error") else "native unavailable"
     fun planStack(w: Int, h: Int, frames: Int, d: DeviceProfile, mode: Int): Plan? {
         if (!available) return null
-        val a = runCatching { nativePlanStack(w,h,frames,d.totalRam,d.availRam,d.cores,d.thermal,mode) }.getOrNull() ?: return null
+        val a = runCatching { nativePlanStack(w, h, frames, d.totalRam, d.availRam, d.cores, d.thermal, mode) }.getOrNull() ?: return null
         if (a.size < 5) return null
-        return Plan(a[0],a[1],a[2] == 1,a[3],a[4])
+        return Plan(a[0], a[1], a[2] == 1, a[3], a[4])
     }
-    fun recommendMode(d: DeviceProfile): Int = if (!available) 0 else runCatching { nativeRecommendMode(d.totalRam,d.availRam,d.cores,d.thermal) }.getOrDefault(0)
-    fun stackProject(lights: Array<String>, w:Int,h:Int,dark:String?,flat:String?,bias:String?,output:String,progress:String,report:String,tile:Int,workers:Int,startTile:Int): StackResult? {
+    fun recommendMode(d: DeviceProfile): Int = if (!available) 0 else runCatching { nativeRecommendMode(d.totalRam, d.availRam, d.cores, d.thermal) }.getOrDefault(0)
+    fun stackProject(lights: Array<String>, w: Int, h: Int, dark: String?, flat: String?, bias: String?, output: String, progress: String, report: String, tile: Int, workers: Int, startTile: Int): StackResult? {
         if (!available) return null
-        val a = runCatching { nativeStackProject(lights,w,h,dark,flat,bias,output,progress,report,tile,workers,startTile) }.getOrNull() ?: return null
+        val a = runCatching { nativeStackProject(lights, w, h, dark, flat, bias, output, progress, report, tile, workers, startTile) }.getOrNull() ?: return null
         if (a.size < 5) return null
-        return StackResult(a[0],a[1],a[2],a[3],a[4])
+        return StackResult(a[0], a[1], a[2], a[3], a[4])
     }
     fun cancelStack() { if (available) runCatching { nativeCancelStack() } }
-    fun exportFullPng(path:String,w:Int,h:Int,cfa:Int,mode:Int,stretch:Float,denoise:Float,output:String):Int {
+    fun exportFullPng(path: String, w: Int, h: Int, cfa: Int, mode: Int, stretch: Float, denoise: Float, output: String): Int {
         if (!available) return 5
-        return runCatching { nativeExportFullPng(path,w,h,cfa,mode,stretch,denoise,output) }.getOrDefault(5)
+        return runCatching { nativeExportFullPng(path, w, h, cfa, mode, stretch, denoise, output) }.getOrDefault(5)
+    }
+    fun exportLinearFits(path: String, w: Int, h: Int, cfa: Int, output: String): Int {
+        if (!available) return 5
+        return runCatching { nativeExportLinearFits(path, w, h, cfa, output) }.getOrDefault(5)
     }
 
-    fun renderPreview(path:String,w:Int,h:Int,cfa:Int,mode:Int,stretch:Float,maxDim:Int=1600): Preview? {
+    fun renderPreview(path: String, w: Int, h: Int, cfa: Int, mode: Int, stretch: Float, maxDim: Int = 1600): Preview? {
         if (!available) return null
-        val a=runCatching { nativeRenderPreview(path,w,h,cfa,mode,stretch,maxDim) }.getOrNull() ?: return null
-        if(a.size<8)return null
-        val b=ByteBuffer.wrap(a).order(ByteOrder.LITTLE_ENDIAN)
-        val ow=b.int;val oh=b.int;val rgba=ByteArray(a.size-8);b.get(rgba);return Preview(ow,oh,rgba)
+        val a = runCatching { nativeRenderPreview(path, w, h, cfa, mode, stretch, maxDim) }.getOrNull() ?: return null
+        if (a.size < 8) return null
+        val b = ByteBuffer.wrap(a).order(ByteOrder.LITTLE_ENDIAN)
+        val ow = b.int; val oh = b.int
+        val rgba = ByteArray(a.size - 8); b.get(rgba)
+        return Preview(ow, oh, rgba)
     }
-    @JvmStatic external fun nativeDetectStars(data: FloatArray,w:Int,h:Int):FloatArray?
-    @JvmStatic private external fun nativeVersion():String
-    @JvmStatic private external fun nativePlanStack(w:Int,h:Int,frames:Int,total:Long,avail:Long,cores:Int,thermal:Int,mode:Int):IntArray?
-    @JvmStatic private external fun nativeRecommendMode(total:Long,avail:Long,cores:Int,thermal:Int):Int
-    @JvmStatic private external fun nativeStackProject(lights:Array<String>,w:Int,h:Int,dark:String?,flat:String?,bias:String?,output:String,progress:String,report:String,tile:Int,workers:Int,startTile:Int):IntArray?
+
+    @JvmStatic external fun nativeDetectStars(data: FloatArray, w: Int, h: Int): FloatArray?
+    @JvmStatic private external fun nativeVersion(): String
+    @JvmStatic private external fun nativePlanStack(w: Int, h: Int, frames: Int, total: Long, avail: Long, cores: Int, thermal: Int, mode: Int): IntArray?
+    @JvmStatic private external fun nativeRecommendMode(total: Long, avail: Long, cores: Int, thermal: Int): Int
+    @JvmStatic private external fun nativeStackProject(lights: Array<String>, w: Int, h: Int, dark: String?, flat: String?, bias: String?, output: String, progress: String, report: String, tile: Int, workers: Int, startTile: Int): IntArray?
     @JvmStatic private external fun nativeCancelStack()
-    @JvmStatic private external fun nativeExportFullPng(path:String,w:Int,h:Int,cfa:Int,mode:Int,stretch:Float,denoise:Float,output:String):Int
-    @JvmStatic private external fun nativeRenderPreview(path:String,w:Int,h:Int,cfa:Int,mode:Int,stretch:Float,maxDim:Int):ByteArray?
+    @JvmStatic private external fun nativeExportFullPng(path: String, w: Int, h: Int, cfa: Int, mode: Int, stretch: Float, denoise: Float, output: String): Int
+    @JvmStatic private external fun nativeExportLinearFits(path: String, w: Int, h: Int, cfa: Int, output: String): Int
+    @JvmStatic private external fun nativeRenderPreview(path: String, w: Int, h: Int, cfa: Int, mode: Int, stretch: Float, maxDim: Int): ByteArray?
 }

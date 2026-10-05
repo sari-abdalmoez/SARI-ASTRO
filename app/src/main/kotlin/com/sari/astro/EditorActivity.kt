@@ -13,6 +13,7 @@ import android.widget.*
 import com.sari.astro.nativebridge.NativeCore
 import java.io.File
 import java.nio.ByteBuffer
+import java.util.Locale
 import java.util.concurrent.Executors
 
 class EditorActivity : Activity() {
@@ -25,6 +26,7 @@ class EditorActivity : Activity() {
     private var h = 0
     private var cfa = 0
     private var mode = 1
+    private var pendingFits: File? = null
     private val ex = Executors.newSingleThreadExecutor()
     private val ui = Handler(Looper.getMainLooper())
 
@@ -39,12 +41,13 @@ class EditorActivity : Activity() {
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density + .5f).toInt()
-    private fun btn(t: String) = Button(this).apply {
+    private fun btn(t: String, primary: Boolean = false) = Button(this).apply {
         text = t
         isAllCaps = false
         minHeight = 0
         minimumHeight = 0
         setTextColor(Color.WHITE)
+        setBackgroundColor(if (primary) Color.rgb(28, 88, 112) else Color.rgb(20, 27, 38))
     }
 
     private fun buildUi() {
@@ -53,12 +56,16 @@ class EditorActivity : Activity() {
             setBackgroundColor(Color.rgb(7, 10, 16))
             setPadding(dp(10), dp(10), dp(10), dp(10))
         }
-        root.addView(TextView(this).apply {
+        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        header.addView(TextView(this).apply {
             text = "SARI Astro • Final Master"
             textSize = 21f
             setTextColor(Color.WHITE)
             setTypeface(typeface, 1)
-        })
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(btn("BACK").apply { setOnClickListener { finish() } }, LinearLayout.LayoutParams(dp(76), dp(42)))
+        root.addView(header)
+
         status = TextView(this).apply {
             text = "Preparing full-resolution master…"
             textSize = 12f
@@ -86,15 +93,26 @@ class EditorActivity : Activity() {
         root.addView(TextView(this).apply { text = "Final noise reduction (master export only)"; setTextColor(Color.LTGRAY) })
         denoiseSeek = SeekBar(this).apply {
             max = 100
-            progress = 32
+            progress = 24
             setOnSeekBarChangeListener(simpleChange { render() })
         }
         root.addView(denoiseSeek, LinearLayout.LayoutParams(-1, dp(44)))
 
-        val actions1 = LinearLayout(this).apply { gravity = Gravity.CENTER }
-        actions1.addView(btn("SAVE FULL 16-BIT PNG").apply { setOnClickListener { exportFullPng() } }, LinearLayout.LayoutParams(0, dp(54), 2f))
-        actions1.addView(btn("EXPORT F32").apply { setOnClickListener { exportF32() } }, LinearLayout.LayoutParams(0, dp(54), 1f))
-        root.addView(actions1)
+        val export1 = LinearLayout(this).apply { gravity = Gravity.CENTER }
+        export1.addView(btn("SAVE 16-BIT PNG", true).apply { setOnClickListener { exportFullPng() } }, LinearLayout.LayoutParams(0, dp(54), 1f))
+        export1.addView(btn("EXPORT FITS").apply { setOnClickListener { exportFits() } }, LinearLayout.LayoutParams(0, dp(54), 1f).apply { leftMargin = dp(6) })
+        root.addView(export1)
+
+        val export2 = LinearLayout(this).apply { gravity = Gravity.CENTER }
+        export2.addView(btn("EXPORT F32").apply { setOnClickListener { exportF32() } }, LinearLayout.LayoutParams(0, dp(50), 1f))
+        export2.addView(TextView(this).apply {
+            text = "${w}×${h} linear master • non-generative processing"
+            textSize = 10f
+            setTextColor(Color.rgb(125, 141, 162))
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), 0, dp(8), 0)
+        }, LinearLayout.LayoutParams(0, dp(50), 1.6f))
+        root.addView(export2)
         setContentView(root)
     }
 
@@ -107,7 +125,7 @@ class EditorActivity : Activity() {
     private fun render() {
         if (path.isBlank()) return
         val stretch = 1f + stretchSeek.progress / 10f
-        status.text = "Rendering full-resolution master preview…"
+        status.text = "Rendering preview from the full-resolution master…"
         ex.submit {
             val p = NativeCore.renderPreview(path, w, h, cfa, mode, stretch, 1600)
             ui.post {
@@ -125,7 +143,7 @@ class EditorActivity : Activity() {
                     pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or bl
                 }
                 image.setImageBitmap(Bitmap.createBitmap(pixels, p.width, p.height, Bitmap.Config.ARGB_8888))
-                status.text = "Master ${w}×${h} • preview 1600px max • native 16-bit export ready"
+                status.text = "Master ${w}×${h} • preview ${p.width}×${p.height} • full-resolution export ready"
             }
         }
     }
@@ -152,20 +170,39 @@ class EditorActivity : Activity() {
                     }
                 }
                 val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                if (uri == null) {
-                    status.text = "Could not create gallery item"
-                    temp.delete()
-                    return@post
-                }
-                val pngBytes = temp.length()
+                if (uri == null) { status.text = "Could not create gallery item"; temp.delete(); return@post }
+                val pngSize = temp.length()
                 val ok = ProjectRepository.copyFileToUri(this, temp, uri)
                 if (android.os.Build.VERSION.SDK_INT >= 29) {
                     contentResolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, if (ok) 0 else 1) }, null, null)
                 }
                 if (!ok) contentResolver.delete(uri, null, null)
                 temp.delete()
-                status.text = if (ok) "Saved full-resolution 16-bit PNG • ${String.format(java.util.Locale.US, "%.1f MB", pngBytes / 1048576.0)}" else "Export failed"
+                status.text = if (ok) "Saved full-resolution 16-bit PNG • ${String.format(Locale.US, "%.1f MB", pngSize / 1048576.0)}" else "Export failed"
                 if (ok) Toast.makeText(this, "Full-resolution PNG saved", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+
+    private fun exportFits() {
+        status.text = "Exporting linear FITS master…"
+        val temp = File(cacheDir, "sari_master_${System.currentTimeMillis()}.fits")
+        ex.submit {
+            val result = NativeCore.exportLinearFits(path, w, h, cfa, temp.absolutePath)
+            ui.post {
+                if (result != 0 || !temp.isFile || temp.length() < 2880) {
+                    status.text = "FITS export failed (status $result)"
+                    temp.delete()
+                    return@post
+                }
+                pendingFits = temp
+                val intent = android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT).apply {
+                    type = "application/fits"
+                    putExtra(android.content.Intent.EXTRA_TITLE, "SARI_Astro_linear_${System.currentTimeMillis()}.fits")
+                    addCategory(android.content.Intent.CATEGORY_OPENABLE)
+                }
+                startActivityForResult(intent, 32)
             }
         }
     }
@@ -182,11 +219,21 @@ class EditorActivity : Activity() {
         super.onActivityResult(r, c, d)
         if (r == 31 && c == RESULT_OK && d?.data != null) {
             val ok = ProjectRepository.copyFileToUri(this, File(path), d.data!!)
-            Toast.makeText(this, if (ok) "Exported" else "Export failed", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, if (ok) "F32 exported" else "F32 export failed", Toast.LENGTH_SHORT).show()
+        } else if (r == 32) {
+            val temp = pendingFits
+            if (c == RESULT_OK && d?.data != null && temp?.isFile == true) {
+                val ok = ProjectRepository.copyFileToUri(this, temp, d.data!!)
+                Toast.makeText(this, if (ok) "Linear FITS exported" else "FITS export failed", Toast.LENGTH_LONG).show()
+            }
+            temp?.delete()
+            pendingFits = null
         }
     }
 
     override fun onDestroy() {
+        pendingFits?.delete()
+        pendingFits = null
         ex.shutdownNow()
         super.onDestroy()
     }

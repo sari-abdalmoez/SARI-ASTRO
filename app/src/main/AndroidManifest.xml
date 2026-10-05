@@ -12,6 +12,7 @@
         <activity android:name=".EditorActivity" android:screenOrientation="portrait" />
         <activity android:name=".ProcessingActivity" android:screenOrientation="portrait" />
         <activity android:name=".GalleryActivity" android:screenOrientation="portrait" />
+        <activity android:name=".ProjectActivity" android:screenOrientation="portrait" />
         <activity android:name=".ProjectsActivity" android:screenOrientation="portrait" />
         <activity android:name=".SettingsActivity" android:screenOrientation="portrait" />
         <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">

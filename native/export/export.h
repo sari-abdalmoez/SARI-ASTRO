@@ -10,4 +10,8 @@ namespace sari {
 Status exportFullPng(const std::string& f32Path, int W, int H, int cfa, int mode,
                      float stretch, float denoiseStrength, const std::string& outputPath);
 
+// Export the stacked linear Bayer master as a 32-bit floating-point FITS image.
+Status exportLinearFits(const std::string& f32Path, int W, int H, int cfa,
+                        const std::string& outputPath);
+
 }
