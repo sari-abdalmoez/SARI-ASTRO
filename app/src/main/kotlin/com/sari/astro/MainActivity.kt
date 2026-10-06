@@ -127,12 +127,48 @@ class MainActivity : AppCompatActivity() {
     private fun updateTexts(){isoText.text="ISO $iso";exposureText.text="EXP ${if(exposureNs>=1_000_000_000L)String.format(Locale.US,"%.1fs",exposureNs/1e9)else String.format(Locale.US,"%.0fms",exposureNs/1e6)}"}
     private fun chooseCalibration(){if(sequenceRunning){Toast.makeText(this,"Stop the sequence first.",Toast.LENGTH_SHORT).show();return};val names=arrayOf("LIGHT (normal)","DARK","FLAT","BIAS");AlertDialog.Builder(this).setTitle("Capture type").setItems(names){_,which->captureKind=when(which){1->ProjectRepository.FrameType.DARK;2->ProjectRepository.FrameType.FLAT;3->ProjectRepository.FrameType.BIAS;else->ProjectRepository.FrameType.LIGHT};captureButton.text=captureKind.name;status.text=if(captureKind==ProjectRepository.FrameType.LIGHT)"ASTRO • LIGHT FRAME" else "CALIBRATION • ${captureKind.name}"}.show()}
     private fun openGallery(){startActivity(Intent(this,GalleryActivity::class.java))}
-    private fun closeCamera(){sequenceRunning=false;runCatching{cameraHandler.removeCallbacksAndMessages(null)};runCatching{session?.stopRepeating()};runCatching{session?.abortCaptures()};session?.close();session=null;camera?.close();camera=null;opening=false;writer?.let{w->w.shutdown();try {
-            if (!w.awaitTermination(3, TimeUnit.SECONDS)) {
-                w.shutdownNow()
+    private fun closeCamera() {
+        sequenceRunning = false
+
+        runCatching {
+            cameraHandler.removeCallbacksAndMessages(null)
+        }
+        runCatching {
+            session?.stopRepeating()
+        }
+        runCatching {
+            session?.abortCaptures()
+        }
+
+        session?.close()
+        session = null
+
+        camera?.close()
+        camera = null
+        opening = false
+
+        val currentWriter = writer
+        writer = null
+
+        if (currentWriter != null) {
+            currentWriter.shutdown()
+            try {
+                if (!currentWriter.awaitTermination(3, TimeUnit.SECONDS)) {
+                    currentWriter.shutdownNow()
+                }
+            } catch (_: InterruptedException) {
+                currentWriter.shutdownNow()
             }
-        } catch (_: InterruptedException) {
-            w.shutdownNow()
-        }};writer=null;clearPending();outstanding.set(0);rawReader?.close();rawReader=null;previewSurface?.release();previewSurface=null}
+        }
+
+        clearPending()
+        outstanding.set(0)
+
+        rawReader?.close()
+        rawReader = null
+
+        previewSurface?.release()
+        previewSurface = null
+    }
     override fun onStop(){started=false;closeCamera();super.onStop()};override fun onDestroy(){closeCamera();cameraThread.quitSafely();super.onDestroy()}
 }
