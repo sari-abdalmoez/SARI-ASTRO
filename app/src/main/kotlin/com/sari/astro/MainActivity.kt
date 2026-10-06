@@ -95,7 +95,35 @@ class MainActivity : AppCompatActivity() {
     }
     private fun toggleSequence(){if(sequenceRunning){stopSequence();return};captureKind=ProjectRepository.FrameType.LIGHT;savedFrames.set(0);failedFrames.set(0);sequenceStarted=SystemClock.elapsedRealtime();sequenceRunning=true;sequenceButton.text="STOP ASTRO";status.text="ASTRO • RUNNING";cameraHandler.post(sequenceTick)}
     private fun stopSequence(){sequenceRunning=false;cameraHandler.removeCallbacks(sequenceTick);sequenceButton.text="START ASTRO";val frames=savedFrames.get();val integration=frames*(exposureNs/1_000_000_000.0);status.text=String.format(Locale.US,"ASTRO • STOPPED • %d frames • %.1fs total integration",frames,integration)}
-    private fun updateSequenceUi(){val e=if(sequenceStarted==0L)0 else SystemClock.elapsedRealtime()-sequenceStarted;val mins=e/60000;val sec=(e/1000)%60;val frames=savedFrames.get();val integration=frames*(exposureNs/1_000_000_000.0);captureButton.text = if (captureKind != ProjectRepository.FrameType.LIGHT) captureKind.name else if (sequenceRunning) "SAVED $frames" else "CAPTURE RAW";if(sequenceRunning)status.text=String.format(Locale.US,"ASTRO • %02d:%02d • %d frames • %.1fs integrated",mins,sec,frames,integration);updateTexts()}
+    private fun updateSequenceUi(){
+        val e = if (sequenceStarted == 0L) 0 else SystemClock.elapsedRealtime() - sequenceStarted
+        val mins = e / 60000
+        val sec = (e / 1000) % 60
+        val frames = savedFrames.get()
+        val integration = frames * (exposureNs / 1_000_000_000.0)
+
+        captureButton.text =
+            if (captureKind != ProjectRepository.FrameType.LIGHT) {
+                captureKind.name
+            } else if (sequenceRunning) {
+                "SAVED $frames"
+            } else {
+                "CAPTURE RAW"
+            }
+
+        if (sequenceRunning) {
+            status.text = String.format(
+                Locale.US,
+                "ASTRO • %02d:%02d • %d frames • %.1fs integrated",
+                mins,
+                sec,
+                frames,
+                integration
+            )
+        }
+
+        updateTexts()
+    }
     private fun updateTexts(){isoText.text="ISO $iso";exposureText.text="EXP ${if(exposureNs>=1_000_000_000L)String.format(Locale.US,"%.1fs",exposureNs/1e9)else String.format(Locale.US,"%.0fms",exposureNs/1e6)}"}
     private fun chooseCalibration(){if(sequenceRunning){Toast.makeText(this,"Stop the sequence first.",Toast.LENGTH_SHORT).show();return};val names=arrayOf("LIGHT (normal)","DARK","FLAT","BIAS");AlertDialog.Builder(this).setTitle("Capture type").setItems(names){_,which->captureKind=when(which){1->ProjectRepository.FrameType.DARK;2->ProjectRepository.FrameType.FLAT;3->ProjectRepository.FrameType.BIAS;else->ProjectRepository.FrameType.LIGHT};captureButton.text=captureKind.name;status.text=if(captureKind==ProjectRepository.FrameType.LIGHT)"ASTRO • LIGHT FRAME" else "CALIBRATION • ${captureKind.name}"}.show()}
     private fun openGallery(){startActivity(Intent(this,GalleryActivity::class.java))}
