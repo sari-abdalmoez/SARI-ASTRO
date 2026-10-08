@@ -1,6 +1,8 @@
 package com.sari.astro
 
 import android.Manifest
+import android.animation.AnimatorSet
+import android.animation.ObjectAnimator
 import android.app.AlertDialog
 import android.content.ContentValues
 import android.content.Intent
@@ -55,13 +57,13 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.max
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var preview:TextureView;private lateinit var status:TextView;private lateinit var isoText:TextView;private lateinit var exposureText:TextView;private lateinit var rawText:TextView;private lateinit var captureButton:Button;private lateinit var focusButton:Button;private lateinit var projectButton:Button
+    private lateinit var preview:TextureView;private lateinit var status:TextView;private lateinit var isoText:TextView;private lateinit var exposureText:TextView;private lateinit var rawText:TextView;private lateinit var captureButton:Button;private lateinit var sequenceButton:Button;private lateinit var focusButton:Button;private lateinit var projectButton:Button
     private lateinit var cameraManager:CameraManager;private val cameraThread=HandlerThread("SARI-Astro-Camera");private lateinit var cameraHandler:Handler;private var writer:ExecutorService?=null
     @Volatile private var camera:CameraDevice?=null;@Volatile private var session:CameraCaptureSession?=null;private var rawReader:ImageReader?=null;private var previewSurface:Surface?=null;private var previewSize:Size?=null;@Volatile private var caps:CameraCaps?=null;@Volatile private var cameraChars:CameraCharacteristics?=null;private var opening=false;private var started=false
     private val pendingLock=Any();private val pendingImages=LinkedHashMap<Long,Image>();private val pendingResults=LinkedHashMap<Long,TotalCaptureResult>();private val outstanding=AtomicInteger(0);@Volatile private var lastCaptureAtMs=0L;private val savedFrames=AtomicInteger(0);private val failedFrames=AtomicInteger(0)
-    private var iso=800;private var exposureNs=7_000_000_000L;@Volatile private var savedSessionDir:File?=null;private var manualFocus=true;@Volatile private var sequenceRunning=false;private var sequenceStarted=0L;private var captureKind=ProjectRepository.FrameType.LIGHT;private val MAX_SEQUENCE_MS=240_000L
+    private var iso=800;private var exposureNs=7_000_000_000L;@Volatile private var savedSessionDir:File?=null;private var manualFocus=true;@Volatile private var sequenceRunning=false;private var sequenceStarted=0L;private var captureKind=ProjectRepository.FrameType.LIGHT;private var captureAnimator:AnimatorSet?=null
     private fun intervalMs()=max(3000L,exposureNs/1_000_000L+750L)
-    private val sequenceTick=object:Runnable{override fun run(){if(!sequenceRunning)return;val elapsed=SystemClock.elapsedRealtime()-sequenceStarted;if(elapsed>=MAX_SEQUENCE_MS){stopSequence(true);return};captureFrame();cameraHandler.postDelayed(this,intervalMs());ui{updateSequenceUi()}}}
+    private val sequenceTick=object:Runnable{override fun run(){if(!sequenceRunning)return;captureFrame(false);cameraHandler.postDelayed(this,intervalMs());ui{updateSequenceUi()}}}
     private val permissionLauncher=registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()){if(it[Manifest.permission.CAMERA]==true||hasCameraPermission()){if(started&&preview.isAvailable)openBackCamera()}else Toast.makeText(this,"Camera permission is required.",Toast.LENGTH_LONG).show()}
     override fun onCreate(b:Bundle?){super.onCreate(b);WindowCompat.setDecorFitsSystemWindows(window,false);buildUi();cameraManager=getSystemService(CameraManager::class.java);cameraThread.start();cameraHandler=Handler(cameraThread.looper);preview.surfaceTextureListener=object:TextureView.SurfaceTextureListener{override fun onSurfaceTextureAvailable(s:SurfaceTexture,w:Int,h:Int){if(started&&hasCameraPermission())openBackCamera()}override fun onSurfaceTextureSizeChanged(s:SurfaceTexture,w:Int,h:Int)=applyPreviewTransform();override fun onSurfaceTextureDestroyed(s:SurfaceTexture)=true;override fun onSurfaceTextureUpdated(s:SurfaceTexture)=Unit}}
     override fun onStart(){super.onStart();started=true;if(!hasCameraPermission()){val p=mutableListOf(Manifest.permission.CAMERA);if(Build.VERSION.SDK_INT<=28)p+=Manifest.permission.WRITE_EXTERNAL_STORAGE;permissionLauncher.launch(p.toTypedArray())}else if(preview.isAvailable)openBackCamera()}
@@ -86,13 +88,13 @@ class MainActivity : AppCompatActivity() {
 
         val brandRow=LinearLayout(this).apply{gravity=Gravity.CENTER}
 
-        val sari=tv("SARI",18f,true).apply{
-            setTextColor(Color.WHITE)
+        val sari=tv("SARI",21f,true).apply{
+            setTextColor(Color.rgb(25,118,255))
             letterSpacing=.08f
         }
 
-        val astro=tv("ASTRO",18f,true).apply{
-            setTextColor(Color.rgb(25,118,255))
+        val astro=tv("ASTRO",21f,true).apply{
+            setTextColor(Color.WHITE)
             letterSpacing=.08f
         }
 
@@ -234,26 +236,51 @@ class MainActivity : AppCompatActivity() {
             setPadding(0,dp(8),0,0)
         }
 
+        sequenceButton=button("START ASTRO").apply{
+            setOnClickListener{toggleSequence()}
+        }
+
         projectButton=button("GALLERY").apply{
             setOnClickListener{openGallery()}
         }
 
         captureButton=button("").apply{
-            contentDescription="Start Astro"
-            setBackgroundResource(com.sari.astro.R.drawable.bg_astro_capture)
-            setCompoundDrawablesWithIntrinsicBounds(com.sari.astro.R.drawable.ic_astro_capture,0,0,0)
+            contentDescription="Capture RAW"
+
+            setBackgroundResource(
+                com.sari.astro.R.drawable.bg_astro_capture
+            )
+
+            setCompoundDrawablesWithIntrinsicBounds(
+                com.sari.astro.R.drawable.ic_astro_capture,
+                0,
+                0,
+                0
+            )
+
             gravity=Gravity.CENTER
             setPadding(0,0,0,0)
             minWidth=0
             minimumWidth=0
             minHeight=0
             minimumHeight=0
-            setOnClickListener{toggleSequence()}
+
+            setOnClickListener{
+                captureFrame(true)
+            }
         }
 
         main.addView(
+            sequenceButton,
+            LinearLayout.LayoutParams(dp(106),dp(52)).apply{
+                rightMargin=dp(18)
+            }
+        )
+
+        main.addView(
             captureButton,
-            LinearLayout.LayoutParams(dp(82),dp(82))
+            LinearLayout.LayoutParams(dp(88),dp(88)
+            )
         )
 
         main.addView(
@@ -296,24 +323,50 @@ class MainActivity : AppCompatActivity() {
         setContentView(root)
     }
 
-    private fun setAstroButtonState(active:Boolean){
-        captureButton.isSelected=active
-        captureButton.setCompoundDrawablesWithIntrinsicBounds(
-            if(active) com.sari.astro.R.drawable.ic_astro_stop else com.sari.astro.R.drawable.ic_astro_capture,
-            0,0,0
+    private fun animateCaptureButton(active:Boolean){
+        captureAnimator?.cancel()
+        captureAnimator=null
+
+        captureButton.animate().cancel()
+        captureButton.scaleX=1f
+        captureButton.scaleY=1f
+
+        if(!active)return
+
+        val x=ObjectAnimator.ofFloat(
+            captureButton,
+            View.SCALE_X,
+            1f,
+            1.07f
         )
-        captureButton.contentDescription=if(active) "Stop Astro" else "Start Astro"
+
+        val y=ObjectAnimator.ofFloat(
+            captureButton,
+            View.SCALE_Y,
+            1f,
+            1.07f
+        )
+
+        captureAnimator=AnimatorSet().apply{
+            playTogether(x,y)
+            duration=850
+            x.repeatCount=ObjectAnimator.INFINITE
+            y.repeatCount=ObjectAnimator.INFINITE
+            x.repeatMode=ObjectAnimator.REVERSE
+            y.repeatMode=ObjectAnimator.REVERSE
+            start()
+        }
     }
 
     private fun hasCameraPermission()=ContextCompat.checkSelfPermission(this,Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED
-    private fun openBackCamera(){if(camera!=null||opening)return;val selected=CameraProbe.probe(this).firstOrNull{it.facingBack}?:CameraProbe.probe(this).firstOrNull()?:run{status.text="No camera";return};caps=selected;cameraChars=runCatching{cameraManager.getCameraCharacteristics(selected.id)}.getOrNull();if(cameraChars==null){status.text="Camera unavailable";return};status.text=if(selected.usableForRawAstro)"ASTRO • ${selected.id}" else "ASTRO LIMITED • ${selected.id}";rawText.text=if(selected.rawSupported)"RAW SENSOR • READY" else "RAW UNSUPPORTED";captureButton.isEnabled=selected.usableForRawAstro;selected.isoRange?.let{iso=iso.coerceIn(it.first,it.last)};selected.exposureNs?.let{r->val u=selected.maxFrameDurationNs?.let{m->minOf(r.last,m)}?:r.last;exposureNs=exposureNs.coerceIn(r.first,max(r.first,u))};updateTexts();writer=Executors.newSingleThreadExecutor{r->Thread(r,"SARI-Writer")};opening=true;runCatching{cameraManager.openCamera(selected.id,stateCallback,cameraHandler)}.onFailure{opening=false;status.text="Camera could not be opened";Toast.makeText(this,it.message?:"Camera error",Toast.LENGTH_LONG).show()}}
+    private fun openBackCamera(){if(camera!=null||opening)return;val selected=CameraProbe.probe(this).firstOrNull{it.facingBack}?:CameraProbe.probe(this).firstOrNull()?:run{status.text="No camera";return};caps=selected;cameraChars=runCatching{cameraManager.getCameraCharacteristics(selected.id)}.getOrNull();if(cameraChars==null){status.text="Camera unavailable";return};status.text=if(selected.usableForRawAstro)"ASTRO • ${selected.id}" else "ASTRO LIMITED • ${selected.id}";rawText.text=if(selected.rawSupported)"RAW SENSOR • READY" else "RAW UNSUPPORTED";captureButton.isEnabled=selected.usableForRawAstro;sequenceButton.isEnabled=selected.usableForRawAstro;selected.isoRange?.let{iso=iso.coerceIn(it.first,it.last)};selected.exposureNs?.let{r->val u=selected.maxFrameDurationNs?.let{m->minOf(r.last,m)}?:r.last;exposureNs=exposureNs.coerceIn(r.first,max(r.first,u))};updateTexts();writer=Executors.newSingleThreadExecutor{r->Thread(r,"SARI-Writer")};opening=true;runCatching{cameraManager.openCamera(selected.id,stateCallback,cameraHandler)}.onFailure{opening=false;status.text="Camera could not be opened";Toast.makeText(this,it.message?:"Camera error",Toast.LENGTH_LONG).show()}}
     private val stateCallback=object:CameraDevice.StateCallback(){override fun onOpened(c:CameraDevice){opening=false;if(!started){c.close();return};camera=c;createSession()}override fun onDisconnected(c:CameraDevice){opening=false;c.close();camera=null;session=null}override fun onError(c:CameraDevice,e:Int){opening=false;c.close();camera=null;session=null;ui{status.text="Camera error $e"}}}
     private fun choosePreviewSize(map:android.hardware.camera2.params.StreamConfigurationMap,target:Size?):Size{val sizes=map.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty();val limit=1280L*960L;val ratio=target?.let{it.width.toDouble()/it.height}?:4.0/3.0;val ok=sizes.filter{it.width.toLong()*it.height<=limit};return ok.minWithOrNull(compareBy<Size>{kotlin.math.abs(it.width.toDouble()/it.height-ratio)}.thenByDescending{it.width.toLong()*it.height})?:sizes.minByOrNull{it.width.toLong()*it.height}?:Size(1280,720)}
     private fun createSession(){val c=camera?:return;val tex=preview.surfaceTexture?:return;val map=cameraChars?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?:return;try{rawReader?.close();val rawSize=if(caps?.rawSupported==true)map.getOutputSizes(ImageFormat.RAW_SENSOR)?.maxByOrNull{it.width.toLong()*it.height}else null;val ps=choosePreviewSize(map,rawSize);previewSize=ps;tex.setDefaultBufferSize(ps.width,ps.height);applyPreviewTransform();previewSurface?.release();previewSurface=Surface(tex);if(rawSize!=null){val r=ImageReader.newInstance(rawSize.width,rawSize.height,ImageFormat.RAW_SENSOR,2);r.setOnImageAvailableListener({ rr -> runCatching { rr.acquireNextImage()?.let(::onRaw) } }, cameraHandler);rawReader=r};val surfaces=mutableListOf(previewSurface!!);rawReader?.let{surfaces+=it.surface};c.createCaptureSession(surfaces,object:CameraCaptureSession.StateCallback(){override fun onConfigured(s:CameraCaptureSession){if(camera==null){s.close();return};session=s;updatePreview()}override fun onConfigureFailed(s:CameraCaptureSession){ui{status.text="Camera session failed"}}},cameraHandler)}catch(t:Throwable){ui{status.text="Camera session failed: ${t.message}"}}}
     private fun applyPreviewTransform(){val ps=previewSize?:return;val vw=preview.width.toFloat();val vh=preview.height.toFloat();if(vw<=0||vh<=0)return;val ba=minOf(ps.width,ps.height).toFloat()/max(ps.width,ps.height);var dw=vw;var dh=vw/ba;if(dh>vh){dh=vh;dw=vh*ba};preview.setTransform(Matrix().apply{setScale(dw/vw,dh/vh,vw/2f,vh/2f)})}
     private fun updatePreview(){val c=camera?:return;val s=session?:return;val surf=previewSurface?:return;runCatching{val q=c.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply{addTarget(surf);set(CaptureRequest.CONTROL_MODE,CaptureRequest.CONTROL_MODE_AUTO);set(CaptureRequest.CONTROL_AF_MODE,supportedAfMode());set(CaptureRequest.CONTROL_AE_MODE,CaptureRequest.CONTROL_AE_MODE_ON)};s.setRepeatingRequest(q.build(),null,cameraHandler)}}
     private fun supportedAfMode():Int{val m=cameraChars?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)?:intArrayOf();return when{m.contains(CameraCharacteristics.CONTROL_AF_MODE_CONTINUOUS_PICTURE)->CameraCharacteristics.CONTROL_AF_MODE_CONTINUOUS_PICTURE;m.contains(CameraCharacteristics.CONTROL_AF_MODE_AUTO)->CameraCharacteristics.CONTROL_AF_MODE_AUTO;else->CameraCharacteristics.CONTROL_AF_MODE_OFF}}
-    private fun captureFrame(){val c=camera?:return;val s=session?:return;val raw=rawReader?:return;if(outstanding.get()>0){if(SystemClock.elapsedRealtime()-lastCaptureAtMs>exposureNs/1_000_000L+10000){outstanding.set(0);clearPending()}else{Toast.makeText(this,"Previous frame is still saving.",Toast.LENGTH_SHORT).show();return}};clearPending();val af=manualFocus&&caps?.manualFocus==true;try{val req=c.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply{addTarget(raw.surface);set(CaptureRequest.CONTROL_MODE,CaptureRequest.CONTROL_MODE_AUTO);set(CaptureRequest.CONTROL_AE_MODE,CaptureRequest.CONTROL_AE_MODE_OFF);set(CaptureRequest.SENSOR_SENSITIVITY,iso);set(CaptureRequest.SENSOR_EXPOSURE_TIME,exposureNs);set(CaptureRequest.SENSOR_FRAME_DURATION,exposureNs);set(CaptureRequest.CONTROL_AF_MODE,if(af)CameraCharacteristics.CONTROL_AF_MODE_OFF else supportedAfMode());if(af)set(CaptureRequest.LENS_FOCUS_DISTANCE,0f)};outstanding.incrementAndGet();lastCaptureAtMs=SystemClock.elapsedRealtime();s.capture(req.build(),object:CameraCaptureSession.CaptureCallback(){override fun onCaptureCompleted(s:CameraCaptureSession,r:CaptureRequest,res:TotalCaptureResult)=onResult(res);override fun onCaptureFailed(s:CameraCaptureSession,r:CaptureRequest,f:CaptureFailure){releaseOutstanding();failedFrames.incrementAndGet();ui{updateSequenceUi()}}},cameraHandler)}catch(t:Throwable){releaseOutstanding();ui{if(!sequenceRunning)animateCaptureButton(false);Toast.makeText(this,t.message?:"Capture failed",Toast.LENGTH_LONG).show()}}}
+    private fun captureFrame(manual:Boolean){val c=camera?:return;val s=session?:return;val raw=rawReader?:return;if(outstanding.get()>0){if(SystemClock.elapsedRealtime()-lastCaptureAtMs>exposureNs/1_000_000L+10000){outstanding.set(0);clearPending()}else{if(manual)Toast.makeText(this,"Previous frame is still saving.",Toast.LENGTH_SHORT).show();return}};clearPending();val af=manualFocus&&caps?.manualFocus==true;try{val req=c.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply{addTarget(raw.surface);set(CaptureRequest.CONTROL_MODE,CaptureRequest.CONTROL_MODE_AUTO);set(CaptureRequest.CONTROL_AE_MODE,CaptureRequest.CONTROL_AE_MODE_OFF);set(CaptureRequest.SENSOR_SENSITIVITY,iso);set(CaptureRequest.SENSOR_EXPOSURE_TIME,exposureNs);set(CaptureRequest.SENSOR_FRAME_DURATION,exposureNs);set(CaptureRequest.CONTROL_AF_MODE,if(af)CameraCharacteristics.CONTROL_AF_MODE_OFF else supportedAfMode());if(af)set(CaptureRequest.LENS_FOCUS_DISTANCE,0f)};outstanding.incrementAndGet();lastCaptureAtMs=SystemClock.elapsedRealtime();ui{animateCaptureButton(true)};s.capture(req.build(),object:CameraCaptureSession.CaptureCallback(){override fun onCaptureCompleted(s:CameraCaptureSession,r:CaptureRequest,res:TotalCaptureResult)=onResult(res);override fun onCaptureFailed(s:CameraCaptureSession,r:CaptureRequest,f:CaptureFailure){releaseOutstanding();failedFrames.incrementAndGet();ui{if(!sequenceRunning)animateCaptureButton(false);updateSequenceUi()}}},cameraHandler)}catch(t:Throwable){releaseOutstanding();ui{if(!sequenceRunning)animateCaptureButton(false);Toast.makeText(this,t.message?:"Capture failed",Toast.LENGTH_LONG).show()}}}
     private fun releaseOutstanding(){outstanding.updateAndGet{if(it>0)it-1 else 0}}
     private fun clearPending(){synchronized(pendingLock){pendingImages.values.forEach{runCatching{it.close()}};pendingImages.clear();pendingResults.clear()}}
     private fun onResult(result:TotalCaptureResult){val ts=result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP)?:0L;val img=synchronized(pendingLock){pendingImages.remove(ts)?.also{}?:run{pendingResults[ts]=result;null}};if(img!=null)dispatchWrite(img,result)}
@@ -378,12 +431,12 @@ class MainActivity : AppCompatActivity() {
                 if(ok)savedFrames.incrementAndGet()
                 else failedFrames.incrementAndGet()
 
-                ui{updateSequenceUi()}
+                ui{if(!sequenceRunning)animateCaptureButton(false);updateSequenceUi()}
             }
         }catch(_:RejectedExecutionException){
             image.close()
             releaseOutstanding()
-            ui{updateSequenceUi()}
+            ui{if(!sequenceRunning)animateCaptureButton(false)}
         }
     }
 
@@ -398,8 +451,8 @@ class MainActivity : AppCompatActivity() {
         manualFocus = !manualFocus
         focusButton.text = if (manualFocus) "∞ FOCUS" else "AUTO FOCUS"
     }
-    private fun toggleSequence(){if(sequenceRunning){stopSequence(false);return};savedSessionDir=null;captureKind=ProjectRepository.FrameType.LIGHT;savedFrames.set(0);failedFrames.set(0);sequenceStarted=SystemClock.elapsedRealtime();sequenceRunning=true;setAstroButtonState(true);status.text="ASTRO • RUNNING • MAX 04:00";cameraHandler.post(sequenceTick)}
-    private fun stopSequence(auto:Boolean){sequenceRunning=false;cameraHandler.removeCallbacks(sequenceTick);setAstroButtonState(false);val frames=savedFrames.get();val integration=frames*(exposureNs/1_000_000_000.0);status.text=String.format(Locale.US,if(auto)"ASTRO • 04:00 LIMIT • %d frames • %.1fs integration" else "ASTRO • STOPPED • %d frames • %.1fs integration",frames,integration)}
+    private fun toggleSequence(){if(sequenceRunning){stopSequence();return};savedSessionDir=null;captureKind=ProjectRepository.FrameType.LIGHT;savedFrames.set(0);failedFrames.set(0);sequenceStarted=SystemClock.elapsedRealtime();sequenceRunning=true;sequenceButton.text="STOP ASTRO";status.text="ASTRO • RUNNING";cameraHandler.post(sequenceTick)}
+    private fun stopSequence(){sequenceRunning=false;cameraHandler.removeCallbacks(sequenceTick);sequenceButton.text="START ASTRO";val frames=savedFrames.get();val integration=frames*(exposureNs/1_000_000_000.0);status.text=String.format(Locale.US,"ASTRO • STOPPED • %d frames • %.1fs total integration",frames,integration)}
     private fun updateSequenceUi(){
         val e = if (sequenceStarted == 0L) 0 else SystemClock.elapsedRealtime() - sequenceStarted
         val mins = e / 60000
@@ -407,31 +460,33 @@ class MainActivity : AppCompatActivity() {
         val frames = savedFrames.get()
         val integration = frames * (exposureNs / 1_000_000_000.0)
 
-        captureButton.contentDescription = if (captureKind != ProjectRepository.FrameType.LIGHT) {
-            "Capture " + captureKind.name
-        } else if (sequenceRunning) {
-            "Stop Astro"
-        } else {
-            "Start Astro"
-        }
+        captureButton.text =
+            if (captureKind != ProjectRepository.FrameType.LIGHT) {
+                captureKind.name
+            } else if (sequenceRunning) {
+                "SAVED $frames"
+            } else {
+                "CAPTURE RAW"
+            }
 
         if (sequenceRunning) {
-            val remaining = ((MAX_SEQUENCE_MS - e).coerceAtLeast(0L) / 1000L)
             status.text = String.format(
                 Locale.US,
-                "ASTRO • %02d:%02d • %d frames • %.1fs integrated • %02d:%02d left",
-                mins, sec, frames, integration, remaining / 60, remaining % 60
+                "ASTRO • %02d:%02d • %d frames • %.1fs integrated",
+                mins,
+                sec,
+                frames,
+                integration
             )
         }
 
         updateTexts()
     }
     private fun updateTexts(){isoText.text="ISO $iso";exposureText.text="EXP ${if(exposureNs>=1_000_000_000L)String.format(Locale.US,"%.1fs",exposureNs/1e9)else String.format(Locale.US,"%.0fms",exposureNs/1e6)}"}
-    private fun chooseCalibration(){if(sequenceRunning){Toast.makeText(this,"Stop the sequence first.",Toast.LENGTH_SHORT).show();return};val names=arrayOf("LIGHT (normal)","DARK","FLAT","BIAS");AlertDialog.Builder(this).setTitle("Capture type").setItems(names){_,which->captureKind=when(which){1->ProjectRepository.FrameType.DARK;2->ProjectRepository.FrameType.FLAT;3->ProjectRepository.FrameType.BIAS;else->ProjectRepository.FrameType.LIGHT};captureButton.contentDescription="Capture " + captureKind.name;status.text=if(captureKind==ProjectRepository.FrameType.LIGHT)"ASTRO • LIGHT FRAME" else "CALIBRATION • ${captureKind.name}"}.show()}
+    private fun chooseCalibration(){if(sequenceRunning){Toast.makeText(this,"Stop the sequence first.",Toast.LENGTH_SHORT).show();return};val names=arrayOf("LIGHT (normal)","DARK","FLAT","BIAS");AlertDialog.Builder(this).setTitle("Capture type").setItems(names){_,which->captureKind=when(which){1->ProjectRepository.FrameType.DARK;2->ProjectRepository.FrameType.FLAT;3->ProjectRepository.FrameType.BIAS;else->ProjectRepository.FrameType.LIGHT};captureButton.text=captureKind.name;status.text=if(captureKind==ProjectRepository.FrameType.LIGHT)"ASTRO • LIGHT FRAME" else "CALIBRATION • ${captureKind.name}"}.show()}
     private fun openGallery(){startActivity(Intent(this,GalleryActivity::class.java))}
     private fun closeCamera() {
         sequenceRunning = false
-        ui{setAstroButtonState(false)}
 
         runCatching {
             cameraHandler.removeCallbacksAndMessages(null)

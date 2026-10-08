@@ -37,9 +37,9 @@ object NativeCore {
         return runCatching { nativeExportLinearFits(path, w, h, cfa, output) }.getOrDefault(5)
     }
 
-    fun renderPreview(path: String, w: Int, h: Int, cfa: Int, mode: Int, stretch: Float, denoise: Float, maxDim: Int = 1600): Preview? {
+    fun renderPreview(path: String, w: Int, h: Int, cfa: Int, mode: Int, stretch: Float, maxDim: Int = 1600): Preview? {
         if (!available) return null
-        val a = runCatching { nativeRenderPreview(path, w, h, cfa, mode, stretch, denoise, maxDim) }.getOrNull() ?: return null
+        val a = runCatching { nativeRenderPreview(path, w, h, cfa, mode, stretch, maxDim) }.getOrNull() ?: return null
         if (a.size < 8) return null
         val b = ByteBuffer.wrap(a).order(ByteOrder.LITTLE_ENDIAN)
         val ow = b.int; val oh = b.int
@@ -55,5 +55,5 @@ object NativeCore {
     @JvmStatic private external fun nativeCancelStack()
     @JvmStatic private external fun nativeExportFullPng(path: String, w: Int, h: Int, cfa: Int, mode: Int, stretch: Float, denoise: Float, output: String): Int
     @JvmStatic private external fun nativeExportLinearFits(path: String, w: Int, h: Int, cfa: Int, output: String): Int
-    @JvmStatic private external fun nativeRenderPreview(path: String, w: Int, h: Int, cfa: Int, mode: Int, stretch: Float, denoise: Float, maxDim: Int): ByteArray?
+    @JvmStatic private external fun nativeRenderPreview(path: String, w: Int, h: Int, cfa: Int, mode: Int, stretch: Float, maxDim: Int): ByteArray?
 }

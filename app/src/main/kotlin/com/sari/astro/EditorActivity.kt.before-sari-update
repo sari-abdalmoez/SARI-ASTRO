@@ -26,11 +26,6 @@ class EditorActivity : Activity() {
     private var h = 0
     private var cfa = 0
     private var mode = 1
-    private val modeSettings = HashMap<Int, IntArray>().apply {
-        put(0, intArrayOf(28, 18))
-        put(1, intArrayOf(30, 24))
-        put(2, intArrayOf(28, 20))
-    }
     private var pendingFits: File? = null
     private val ex = Executors.newSingleThreadExecutor()
     private val ui = Handler(Looper.getMainLooper())
@@ -82,30 +77,24 @@ class EditorActivity : Activity() {
         root.addView(image, LinearLayout.LayoutParams(-1, 0, 1f))
 
         val modes = LinearLayout(this).apply { gravity = Gravity.CENTER }
-        modes.addView(btn("COLOR").apply { setOnClickListener { selectMode(1) } }, LinearLayout.LayoutParams(0, dp(46), 1f))
-        modes.addView(btn("MONO").apply { setOnClickListener { selectMode(0) } }, LinearLayout.LayoutParams(0, dp(46), 1f))
-        modes.addView(btn("NATURAL").apply { setOnClickListener { selectMode(2) } }, LinearLayout.LayoutParams(0, dp(46), 1f))
+        modes.addView(btn("COLOR").apply { setOnClickListener { mode = 1; render() } }, LinearLayout.LayoutParams(0, dp(46), 1f))
+        modes.addView(btn("MONO").apply { setOnClickListener { mode = 0; render() } }, LinearLayout.LayoutParams(0, dp(46), 1f))
+        modes.addView(btn("NATURAL").apply { setOnClickListener { mode = 2; render() } }, LinearLayout.LayoutParams(0, dp(46), 1f))
         root.addView(modes)
 
         root.addView(TextView(this).apply { text = "Stretch"; setTextColor(Color.LTGRAY) })
         stretchSeek = SeekBar(this).apply {
             max = 90
-            progress = modeSettings[mode]!![0]
-            setOnSeekBarChangeListener(simpleChange {
-                modeSettings[mode]!![0] = progress
-                render()
-            })
+            progress = 30
+            setOnSeekBarChangeListener(simpleChange { render() })
         }
         root.addView(stretchSeek, LinearLayout.LayoutParams(-1, dp(44)))
 
         root.addView(TextView(this).apply { text = "Final noise reduction (master export only)"; setTextColor(Color.LTGRAY) })
         denoiseSeek = SeekBar(this).apply {
             max = 100
-            progress = modeSettings[mode]!![1]
-            setOnSeekBarChangeListener(simpleChange {
-                modeSettings[mode]!![1] = progress
-                render()
-            })
+            progress = 24
+            setOnSeekBarChangeListener(simpleChange { render() })
         }
         root.addView(denoiseSeek, LinearLayout.LayoutParams(-1, dp(44)))
 
@@ -127,15 +116,6 @@ class EditorActivity : Activity() {
         setContentView(root)
     }
 
-    private fun selectMode(newMode: Int) {
-        modeSettings[mode]!![0] = stretchSeek.progress
-        modeSettings[mode]!![1] = denoiseSeek.progress
-        mode = newMode
-        stretchSeek.progress = modeSettings[mode]!![0]
-        denoiseSeek.progress = modeSettings[mode]!![1]
-        render()
-    }
-
     private fun simpleChange(onUser: () -> Unit) = object : SeekBar.OnSeekBarChangeListener {
         override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) { if (fromUser) onUser() }
         override fun onStartTrackingTouch(s: SeekBar?) = Unit
@@ -145,10 +125,9 @@ class EditorActivity : Activity() {
     private fun render() {
         if (path.isBlank()) return
         val stretch = 1f + stretchSeek.progress / 10f
-        val denoise = denoiseSeek.progress / 100f
         status.text = "Rendering preview from the full-resolution master…"
         ex.submit {
-            val p = NativeCore.renderPreview(path, w, h, cfa, mode, stretch, denoise, 1600)
+            val p = NativeCore.renderPreview(path, w, h, cfa, mode, stretch, 1600)
             ui.post {
                 if (p == null) {
                     status.text = "Preview render failed"

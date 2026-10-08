@@ -29,7 +29,6 @@ object ProjectRepository {
         val cfa: Int,
         val iso: Int,
         val exposureNs: Long,
-        val sensorTimestamp: Long = 0L,
         val name: String,
         val sizeBytes: Long,
         val sourcePath: String? = null,
@@ -207,15 +206,6 @@ object ProjectRepository {
         val iso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
         val exp = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
         val temp: Float? = null
-        val sensorTimestamp = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: image.timestamp
-        val duplicate = sub.listFiles { f -> f.isFile && f.extension.equals("properties", true) }
-            ?.any { pf ->
-                pf.readLines().any { it == "sensorTimestamp=$sensorTimestamp" }
-            } == true
-        if (duplicate) {
-            file.delete()
-            return null
-        }
         File(file.parentFile, file.nameWithoutExtension + ".properties").printWriter().use { out ->
             out.println("type=${type.name}")
             out.println("width=$w")
@@ -223,7 +213,6 @@ object ProjectRepository {
             out.println("cfa=$cfa")
             out.println("iso=$iso")
             out.println("exposureNs=$exp")
-            out.println("sensorTimestamp=$sensorTimestamp")
             if (temp != null) out.println("temperatureC=$temp")
         }
         return FrameInfo(file.absolutePath, type, w, h, cfa, iso, exp, file.name, file.length(), temperatureC = temp?.toFloat(), stackable = type == FrameType.LIGHT)
@@ -285,7 +274,6 @@ object ProjectRepository {
                         f.absolutePath, type, m["width"]?.toIntOrNull() ?: s.width, m["height"]?.toIntOrNull() ?: s.height, m["cfa"]?.toIntOrNull() ?: s.cfa,
                         m["iso"]?.toIntOrNull() ?: 0,
                         m["exposureNs"]?.toLongOrNull() ?: 0L,
-                        m["sensorTimestamp"]?.toLongOrNull() ?: 0L,
                         f.name,
                         f.length(),
                         sourcePath = m["sourcePath"],

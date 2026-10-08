@@ -86,7 +86,7 @@ static float filteredRaw(const std::vector<float>& buf, int W, int originY, int 
     if (ws <= 0.0) return center;
     const float smooth = static_cast<float>(sum / ws);
     const float preserve = localScale / (localScale + 2.0f * sigma + 1e-6f);
-    const float effective = std::pow(std::max(0.f, std::min(1.f, strength)), 0.68f); const float alpha = std::max(0.f, std::min(0.92f * effective, (1.f - preserve) * effective));
+    const float alpha = std::max(0.f, std::min(0.85f * strength, (1.f - preserve) * strength));
     return center * (1.f - alpha) + smooth * alpha;
 }
 
