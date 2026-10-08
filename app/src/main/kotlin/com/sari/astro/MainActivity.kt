@@ -42,6 +42,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import com.sari.astro.camera.CameraCaps
 import com.sari.astro.camera.CameraProbe
+import java.io.File
 import java.util.LinkedHashMap
 import java.util.Locale
 import java.util.concurrent.ExecutorService
@@ -56,7 +57,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cameraManager:CameraManager;private val cameraThread=HandlerThread("SARI-Astro-Camera");private lateinit var cameraHandler:Handler;private var writer:ExecutorService?=null
     @Volatile private var camera:CameraDevice?=null;@Volatile private var session:CameraCaptureSession?=null;private var rawReader:ImageReader?=null;private var previewSurface:Surface?=null;private var previewSize:Size?=null;@Volatile private var caps:CameraCaps?=null;@Volatile private var cameraChars:CameraCharacteristics?=null;private var opening=false;private var started=false
     private val pendingLock=Any();private val pendingImages=LinkedHashMap<Long,Image>();private val pendingResults=LinkedHashMap<Long,TotalCaptureResult>();private val outstanding=AtomicInteger(0);@Volatile private var lastCaptureAtMs=0L;private val savedFrames=AtomicInteger(0);private val failedFrames=AtomicInteger(0)
-    private var iso=800;private var exposureNs=7_000_000_000L;private var manualFocus=true;@Volatile private var sequenceRunning=false;private var sequenceStarted=0L;private var captureKind=ProjectRepository.FrameType.LIGHT
+    private var iso=800;private var exposureNs=7_000_000_000L;private var savedSessionDir:File?=null;private var manualFocus=true;@Volatile private var sequenceRunning=false;private var sequenceStarted=0L;private var captureKind=ProjectRepository.FrameType.LIGHT
     private fun intervalMs()=max(3000L,exposureNs/1_000_000L+750L)
     private val sequenceTick=object:Runnable{override fun run(){if(!sequenceRunning)return;captureFrame(false);cameraHandler.postDelayed(this,intervalMs());ui{updateSequenceUi()}}}
     private val permissionLauncher=registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()){if(it[Manifest.permission.CAMERA]==true||hasCameraPermission()){if(started&&preview.isAvailable)openBackCamera()}else Toast.makeText(this,"Camera permission is required.",Toast.LENGTH_LONG).show()}
@@ -81,9 +82,73 @@ class MainActivity : AppCompatActivity() {
     private fun onResult(result:TotalCaptureResult){val ts=result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP)?:0L;val img=synchronized(pendingLock){pendingImages.remove(ts)?.also{}?:run{pendingResults[ts]=result;null}};if(img!=null)dispatchWrite(img,result)}
     private fun onRaw(image:Image){val res=synchronized(pendingLock){pendingResults.remove(image.timestamp)?:run{pendingImages[image.timestamp]=image;null}};if(res!=null)dispatchWrite(image,res)}
     private fun exifOrientation()=when(cameraChars?.get(CameraCharacteristics.SENSOR_ORIENTATION)){90->6;180->3;270->8;else->1}
-    private fun dispatchWrite(image:Image,result:TotalCaptureResult){val ch=cameraChars;val w=writer;if(ch==null||w==null){image.close();releaseOutstanding();return};val kind=captureKind;try{w.execute{var ok=false;try{val sessionDir=savedSessionDir
-val saved=ProjectRepository.saveRawFrame(this,image,result,ch,kind,sessionDir)
-if(kind==ProjectRepository.FrameType.LIGHT)ok=saved!=null&&writeDng(ch,result,image,exifOrientation(),savedSessionDir) else ok=saved!=null}finally{image.close();releaseOutstanding()};if(ok)savedFrames.incrementAndGet()else failedFrames.incrementAndGet();ui{updateSequenceUi()}}}catch(_:RejectedExecutionException){image.close();releaseOutstanding()}}
+    private fun dispatchWrite(image:Image,result:TotalCaptureResult){
+        val ch=cameraChars
+        val w=writer
+        if(ch==null||w==null){
+            image.close()
+            releaseOutstanding()
+            return
+        }
+
+        val kind=captureKind
+
+        try{
+            w.execute{
+                var ok=false
+
+                try{
+                    val cfa=ch.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: 0
+                    val neutral=result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
+                        ?.map{it.toFloat()}
+                        ?.toFloatArray()
+
+                    val targetSession=savedSessionDir ?: ProjectRepository.newSession(
+                        this,
+                        image.width,
+                        image.height,
+                        cfa,
+                        neutral
+                    ).dir.also{
+                        savedSessionDir=it
+                    }
+
+                    val saved=ProjectRepository.saveRawFrame(
+                        this,
+                        image,
+                        result,
+                        ch,
+                        kind,
+                        targetSession
+                    )
+
+                    ok=if(kind==ProjectRepository.FrameType.LIGHT){
+                        saved!=null&&writeDng(
+                            ch,
+                            result,
+                            image,
+                            exifOrientation(),
+                            targetSession
+                        )
+                    }else{
+                        saved!=null
+                    }
+                }finally{
+                    image.close()
+                    releaseOutstanding()
+                }
+
+                if(ok)savedFrames.incrementAndGet()
+                else failedFrames.incrementAndGet()
+
+                ui{updateSequenceUi()}
+            }
+        }catch(_:RejectedExecutionException){
+            image.close()
+            releaseOutstanding()
+        }
+    }
+
     private fun writeDng(ch:CameraCharacteristics,result:TotalCaptureResult,image:Image,orientation:Int,sessionDir:File?):Boolean{val values=ContentValues().apply{put(MediaStore.Images.Media.DISPLAY_NAME,"SARI_Astro_${System.currentTimeMillis()}.dng");put(MediaStore.Images.Media.MIME_TYPE,"image/x-adobe-dng");if(Build.VERSION.SDK_INT>=29){put(MediaStore.Images.Media.RELATIVE_PATH,if(sessionDir!=null)ProjectRepository.mediaStoreRelativePath(sessionDir,"RAW") else "Pictures/SARI Astro/RAW");put(MediaStore.Images.Media.IS_PENDING,1)}};val uri=contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values)?:return false;return try{val creator=DngCreator(ch,result);try{creator.setOrientation(orientation);contentResolver.openOutputStream(uri)?.use{creator.writeImage(it,image)}?:throw IllegalStateException("DNG stream unavailable")}finally{creator.close()};if(Build.VERSION.SDK_INT>=29)contentResolver.update(uri,ContentValues().apply{put(MediaStore.Images.Media.IS_PENDING,0)},null,null);true}catch(t:Throwable){runCatching{contentResolver.delete(uri,null,null)};ui{Toast.makeText(this,"DNG could not be saved: ${t.message}",Toast.LENGTH_LONG).show()};false}}
     private fun cycleIso(){val r=caps?.isoRange?:return;val c=listOf(100,200,400,800,1600,3200,6400).filter{it in r};if(c.isEmpty())return;iso=c[(c.indexOf(iso)+1)%c.size];updateTexts()}
     private fun cycleExposure(){val r=caps?.exposureNs?:return;val mf=caps?.maxFrameDurationNs;val presets=mutableListOf(500_000_000L,1_000_000_000L,2_000_000_000L,4_000_000_000L,5_000_000_000L,6_000_000_000L,7_000_000_000L,8_000_000_000L,10_000_000_000L,12_000_000_000L,15_000_000_000L);val maxSupported=mf?.let{minOf(it,r.last)}?:r.last;if(maxSupported>15_000_000_000L)presets+=maxSupported;val c=presets.distinct().filter{it in r&&(mf==null||it<=mf)}.sorted();if(c.isEmpty())return;val idx=c.indexOf(exposureNs);exposureNs=c[if(idx<0)0 else (idx+1)%c.size];updateTexts()}
@@ -95,7 +160,7 @@ if(kind==ProjectRepository.FrameType.LIGHT)ok=saved!=null&&writeDng(ch,result,im
         manualFocus = !manualFocus
         focusButton.text = if (manualFocus) "∞ FOCUS" else "AUTO FOCUS"
     }
-    private fun toggleSequence(){if(sequenceRunning){stopSequence();return};captureKind=ProjectRepository.FrameType.LIGHT;savedFrames.set(0);failedFrames.set(0);sequenceStarted=SystemClock.elapsedRealtime();sequenceRunning=true;sequenceButton.text="STOP ASTRO";status.text="ASTRO • RUNNING";cameraHandler.post(sequenceTick)}
+    private fun toggleSequence(){if(sequenceRunning){stopSequence();return};savedSessionDir=null;captureKind=ProjectRepository.FrameType.LIGHT;savedFrames.set(0);failedFrames.set(0);sequenceStarted=SystemClock.elapsedRealtime();sequenceRunning=true;sequenceButton.text="STOP ASTRO";status.text="ASTRO • RUNNING";cameraHandler.post(sequenceTick)}
     private fun stopSequence(){sequenceRunning=false;cameraHandler.removeCallbacks(sequenceTick);sequenceButton.text="START ASTRO";val frames=savedFrames.get();val integration=frames*(exposureNs/1_000_000_000.0);status.text=String.format(Locale.US,"ASTRO • STOPPED • %d frames • %.1fs total integration",frames,integration)}
     private fun updateSequenceUi(){
         val e = if (sequenceStarted == 0L) 0 else SystemClock.elapsedRealtime() - sequenceStarted
