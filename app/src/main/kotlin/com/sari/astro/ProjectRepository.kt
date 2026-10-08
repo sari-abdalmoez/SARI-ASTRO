@@ -226,7 +226,7 @@ object ProjectRepository {
             out.println("sensorTimestamp=$sensorTimestamp")
             if (temp != null) out.println("temperatureC=$temp")
         }
-        return FrameInfo(file.absolutePath, type, w, h, cfa, iso, exp, file.name, file.length(), temperatureC = temp?.toFloat(), stackable = type == FrameType.LIGHT)
+        return FrameInfo(file.absolutePath, type, w, h, cfa, iso, exp, sensorTimestamp = sensorTimestamp, name = file.name, sizeBytes = file.length(), temperatureC = temp?.toFloat(), stackable = type == FrameType.LIGHT)
     }
 
     private fun writeRawF32(image: Image, result: TotalCaptureResult, chars: CameraCharacteristics, file: File): Boolean {
@@ -286,8 +286,8 @@ object ProjectRepository {
                         m["iso"]?.toIntOrNull() ?: 0,
                         m["exposureNs"]?.toLongOrNull() ?: 0L,
                         m["sensorTimestamp"]?.toLongOrNull() ?: 0L,
-                        f.name,
-                        f.length(),
+                        name = f.name,
+                        sizeBytes = f.length(),
                         sourcePath = m["sourcePath"],
                         temperatureC = m["temperatureC"]?.toFloatOrNull(),
                         stackable = stackable
@@ -303,7 +303,7 @@ object ProjectRepository {
         }?.sortedBy { it.name }?.forEach { f ->
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(f.absolutePath, bounds)
-            out += FrameInfo(f.absolutePath, FrameType.IMPORTED, bounds.outWidth, bounds.outHeight, 0, 0, 0L, f.name, f.length(), stackable = false)
+            out += FrameInfo(f.absolutePath, FrameType.IMPORTED, bounds.outWidth, bounds.outHeight, 0, 0, 0L, name = f.name, sizeBytes = f.length(), stackable = false)
         }
         return out
     }

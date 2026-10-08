@@ -137,7 +137,7 @@ class GalleryActivity : AppCompatActivity() {
         val light = project.firstLight ?: return null
         if (light.type == ProjectRepository.FrameType.IMPORTED) return decodeThumb(File(light.path), 640)
         return runCatching {
-            NativeCore.renderPreview(light.path, light.width, light.height, light.cfa, 1, 2.0f, 320)?.let { p ->
+            NativeCore.renderPreview(light.path, light.width, light.height, light.cfa, 1, 2.0f, 0f, 320)?.let { p ->
                 val pixels = IntArray(p.width * p.height)
                 val b = java.nio.ByteBuffer.wrap(p.rgba)
                 for (i in pixels.indices) {

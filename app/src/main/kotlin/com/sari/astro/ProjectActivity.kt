@@ -117,7 +117,7 @@ class ProjectActivity : AppCompatActivity() {
     private fun loadThumb(f: ProjectRepository.FrameInfo):Bitmap?{
         if(f.type==ProjectRepository.FrameType.IMPORTED) return decodeThumb(File(f.path), 360)
         return runCatching{
-            NativeCore.renderPreview(f.path,f.width,f.height,f.cfa,1,2.0f,280)?.let{p->
+            NativeCore.renderPreview(f.path,f.width,f.height,f.cfa,1,2.0f,0f,280)?.let{p->
                 val pixels=IntArray(p.width*p.height);val b=ByteBuffer.wrap(p.rgba)
                 for(i in pixels.indices){val r=b.get().toInt()and 255;val g=b.get().toInt()and 255;val bl=b.get().toInt()and 255;val a=b.get().toInt()and 255;pixels[i]=(a shl 24)or(r shl 16)or(g shl 8)or bl}
                 Bitmap.createBitmap(pixels,p.width,p.height,Bitmap.Config.ARGB_8888)
