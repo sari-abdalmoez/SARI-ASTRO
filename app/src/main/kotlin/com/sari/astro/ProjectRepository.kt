@@ -170,13 +170,32 @@ object ProjectRepository {
         image: Image,
         result: TotalCaptureResult,
         chars: CameraCharacteristics,
-        type: FrameType
+        type: FrameType,
+        sessionDir: File? = null
     ): FrameInfo? {
         val w = image.width
         val h = image.height
         val cfa = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: 0
         val neutral = result.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)?.map { it.toFloat() }?.toFloatArray()
-        val session = ensureSession(ctx, w, h, cfa, neutral)
+        val session = if (sessionDir != null && sessionDir.isDirectory) {
+            val existing = readSession(sessionDir)
+            val compatible = (existing.width <= 0 || existing.width == w) &&
+                (existing.height <= 0 || existing.height == h) &&
+                (existing.cfa == 0 || existing.cfa == cfa)
+            if (!compatible) return null
+            if (existing.width <= 0 || existing.height <= 0 || existing.cfa == 0) {
+                val updated = existing.copy(
+                    width = if (existing.width > 0) existing.width else w,
+                    height = if (existing.height > 0) existing.height else h,
+                    cfa = if (existing.cfa != 0) existing.cfa else cfa,
+                    neutral = existing.neutral ?: neutral
+                )
+                writeSessionMetadata(updated)
+                updated
+            } else existing
+        } else {
+            ensureSession(ctx, w, h, cfa, neutral)
+        }
         val sub = if (type == FrameType.LIGHT) File(session.dir, "frames")
         else File(File(session.dir, "calibration"), type.name.lowercase(Locale.US))
         sub.mkdirs()
@@ -228,6 +247,17 @@ object ProjectRepository {
             }
         }
         return true
+    }
+
+    /**
+     * Dedicated public MediaStore folder for one Astro project.
+     * The session id is included so two projects with the same title never share an album.
+     */
+    fun mediaStoreRelativePath(sessionDir: File, bucket: String): String {
+        val title = safeName(readSession(sessionDir).title).ifBlank { "Astro" }
+        val id = sessionDir.name.removePrefix("session-")
+        val cleanBucket = safeName(bucket).ifBlank { "RAW" }
+        return "Pictures/SARI Astro/$title-$id/$cleanBucket"
     }
 
     fun listFrames(ctx: Context): List<FrameInfo> = latestSession(ctx)?.let { scan(it.dir) } ?: emptyList()
