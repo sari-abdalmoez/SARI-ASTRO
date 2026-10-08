@@ -1,6 +1,8 @@
 package com.sari.astro
 
 import android.Manifest
+import android.animation.AnimatorSet
+import android.animation.ObjectAnimator
 import android.app.AlertDialog
 import android.content.ContentValues
 import android.content.Intent
@@ -28,6 +30,7 @@ import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Size
 import android.view.Gravity
+import android.view.View
 import android.view.Surface
 import android.view.TextureView
 import android.widget.Button
@@ -58,7 +61,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cameraManager:CameraManager;private val cameraThread=HandlerThread("SARI-Astro-Camera");private lateinit var cameraHandler:Handler;private var writer:ExecutorService?=null
     @Volatile private var camera:CameraDevice?=null;@Volatile private var session:CameraCaptureSession?=null;private var rawReader:ImageReader?=null;private var previewSurface:Surface?=null;private var previewSize:Size?=null;@Volatile private var caps:CameraCaps?=null;@Volatile private var cameraChars:CameraCharacteristics?=null;private var opening=false;private var started=false
     private val pendingLock=Any();private val pendingImages=LinkedHashMap<Long,Image>();private val pendingResults=LinkedHashMap<Long,TotalCaptureResult>();private val outstanding=AtomicInteger(0);@Volatile private var lastCaptureAtMs=0L;private val savedFrames=AtomicInteger(0);private val failedFrames=AtomicInteger(0)
-    private var iso=800;private var exposureNs=7_000_000_000L;private var savedSessionDir:File?=null;private var manualFocus=true;@Volatile private var sequenceRunning=false;private var sequenceStarted=0L;private var captureKind=ProjectRepository.FrameType.LIGHT
+    private var iso=800;private var exposureNs=7_000_000_000L;@Volatile private var savedSessionDir:File?=null;private var manualFocus=true;@Volatile private var sequenceRunning=false;private var sequenceStarted=0L;private var captureKind=ProjectRepository.FrameType.LIGHT;private var captureAnimator:AnimatorSet?=null
     private fun intervalMs()=max(3000L,exposureNs/1_000_000L+750L)
     private val sequenceTick=object:Runnable{override fun run(){if(!sequenceRunning)return;captureFrame(false);cameraHandler.postDelayed(this,intervalMs());ui{updateSequenceUi()}}}
     private val permissionLauncher=registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()){if(it[Manifest.permission.CAMERA]==true||hasCameraPermission()){if(started&&preview.isAvailable)openBackCamera()}else Toast.makeText(this,"Camera permission is required.",Toast.LENGTH_LONG).show()}
@@ -68,7 +71,280 @@ class MainActivity : AppCompatActivity() {
     private fun tv(t:String,s:Float,b:Boolean=false)=TextView(this).apply{text=t;textSize=s;setTextColor(Color.WHITE);if(b)setTypeface(typeface,android.graphics.Typeface.BOLD)}
     private fun pill(t:String)=tv(t,12f).apply{gravity=Gravity.CENTER;setPadding(dp(8),0,dp(8),0);setBackgroundColor(0x88000000.toInt())}
     private fun button(t:String)=Button(this).apply{text=t;textSize=12f;isAllCaps=false;minHeight=0;minimumHeight=0;setTextColor(Color.WHITE);setBackgroundColor(0xCC141A24.toInt())}
-    private fun buildUi(){val root=FrameLayout(this).apply{setBackgroundColor(Color.BLACK)};preview=TextureView(this);root.addView(preview,FrameLayout.LayoutParams(-1,-1));val top=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(8),dp(12),dp(4))};val header=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL};status=tv("SARI ASTRO",16f,true);header.addView(status,LinearLayout.LayoutParams(0,-2,1f));rawText=pill("RAW — CHECKING");header.addView(rawText,LinearLayout.LayoutParams(-2,dp(36)));projectButton=button("GALLERY");projectButton.setOnClickListener{openGallery()};header.addView(projectButton,LinearLayout.LayoutParams(-2,dp(40)).apply{leftMargin=dp(8)});top.addView(header);val info=LinearLayout(this).apply{gravity=Gravity.CENTER};isoText=pill("ISO —");exposureText=pill("EXP —");info.addView(isoText,LinearLayout.LayoutParams(0,dp(36),1f).apply{rightMargin=dp(4)});info.addView(exposureText,LinearLayout.LayoutParams(0,dp(36),1f).apply{leftMargin=dp(4)});top.addView(info,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(6)});root.addView(top,FrameLayout.LayoutParams(-1,-2,Gravity.TOP));val controls=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER;setPadding(dp(12),dp(8),dp(12),dp(12))};val row=LinearLayout(this).apply{gravity=Gravity.CENTER};val isoBtn=button("ISO").apply{setOnClickListener{cycleIso()}};val expBtn=button("EXPOSURE").apply{setOnClickListener{cycleExposure()}};focusButton=button("∞ FOCUS").apply{setOnClickListener{toggleFocus()}};val calBtn=button("CALIBRATE").apply{setOnClickListener{chooseCalibration()}};row.addView(isoBtn,LinearLayout.LayoutParams(0,dp(46),1f).apply{rightMargin=dp(4)});row.addView(expBtn,LinearLayout.LayoutParams(0,dp(46),1f).apply{leftMargin=dp(4);rightMargin=dp(4)});row.addView(focusButton,LinearLayout.LayoutParams(0,dp(46),1f).apply{leftMargin=dp(4);rightMargin=dp(4)});row.addView(calBtn,LinearLayout.LayoutParams(0,dp(46),1f).apply{leftMargin=dp(4)});controls.addView(row);val main=LinearLayout(this).apply{gravity=Gravity.CENTER};sequenceButton=button("START ASTRO").apply{setOnClickListener{toggleSequence()}};captureButton=button("CAPTURE RAW").apply{setOnClickListener{captureFrame(true)}};main.addView(sequenceButton,LinearLayout.LayoutParams(0,dp(60),1f).apply{rightMargin=dp(4)});main.addView(captureButton,LinearLayout.LayoutParams(0,dp(60),1f).apply{leftMargin=dp(4)});controls.addView(main,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8)});root.addView(controls,FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM));ViewCompat.setOnApplyWindowInsetsListener(root){_,i->val bars=i.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout());top.setPadding(dp(12)+bars.left,dp(8)+bars.top,dp(12)+bars.right,dp(4));controls.setPadding(dp(12)+bars.left,dp(8),dp(12)+bars.right,dp(12)+bars.bottom);i};setContentView(root)}
+    private fun buildUi(){
+        val root=FrameLayout(this).apply{setBackgroundColor(Color.BLACK)}
+        preview=TextureView(this)
+        root.addView(preview,FrameLayout.LayoutParams(-1,-1))
+
+        val top=LinearLayout(this).apply{
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(16),dp(10),dp(16),dp(4))
+        }
+
+        val brand=LinearLayout(this).apply{
+            orientation=LinearLayout.VERTICAL
+            gravity=Gravity.CENTER_HORIZONTAL
+        }
+
+        val brandRow=LinearLayout(this).apply{gravity=Gravity.CENTER}
+
+        val sari=tv("SARI",21f,true).apply{
+            setTextColor(Color.rgb(25,118,255))
+            letterSpacing=.08f
+        }
+
+        val astro=tv("ASTRO",21f,true).apply{
+            setTextColor(Color.WHITE)
+            letterSpacing=.08f
+        }
+
+        brandRow.addView(sari,LinearLayout.LayoutParams(-2,-2))
+        brandRow.addView(
+            astro,
+            LinearLayout.LayoutParams(-2,-2).apply{leftMargin=dp(7)}
+        )
+
+        brand.addView(brandRow,LinearLayout.LayoutParams(-1,-2))
+
+        val line=View(this).apply{
+            setBackgroundColor(Color.rgb(25,118,255))
+        }
+
+        brand.addView(
+            line,
+            LinearLayout.LayoutParams(dp(48),dp(3)).apply{
+                topMargin=dp(4)
+            }
+        )
+
+        top.addView(brand,LinearLayout.LayoutParams(-1,-2))
+
+        val info=LinearLayout(this).apply{
+            gravity=Gravity.CENTER
+            setPadding(0,dp(7),0,0)
+        }
+
+        rawText=pill("RAW — CHECKING")
+        isoText=pill("ISO —")
+        exposureText=pill("EXP —")
+
+        info.addView(
+            rawText,
+            LinearLayout.LayoutParams(0,dp(32),1f).apply{
+                rightMargin=dp(3)
+            }
+        )
+
+        info.addView(
+            isoText,
+            LinearLayout.LayoutParams(0,dp(32),1f).apply{
+                leftMargin=dp(3)
+                rightMargin=dp(3)
+            }
+        )
+
+        info.addView(
+            exposureText,
+            LinearLayout.LayoutParams(0,dp(32),1f).apply{
+                leftMargin=dp(3)
+            }
+        )
+
+        top.addView(info)
+
+        root.addView(
+            top,
+            FrameLayout.LayoutParams(-1,-2,Gravity.TOP)
+        )
+
+        val controls=LinearLayout(this).apply{
+            orientation=LinearLayout.VERTICAL
+            gravity=Gravity.CENTER_HORIZONTAL
+            setPadding(dp(12),dp(8),dp(12),dp(14))
+        }
+
+        val tools=LinearLayout(this).apply{
+            gravity=Gravity.CENTER
+        }
+
+        val isoBtn=button("ISO").apply{
+            setOnClickListener{cycleIso()}
+        }
+
+        val expBtn=button("EXPOSURE").apply{
+            setOnClickListener{cycleExposure()}
+        }
+
+        focusButton=button("∞ FOCUS").apply{
+            setOnClickListener{toggleFocus()}
+        }
+
+        val calBtn=button("CALIBRATE").apply{
+            setOnClickListener{chooseCalibration()}
+        }
+
+        tools.addView(
+            isoBtn,
+            LinearLayout.LayoutParams(0,dp(42),1f).apply{
+                rightMargin=dp(3)
+            }
+        )
+
+        tools.addView(
+            expBtn,
+            LinearLayout.LayoutParams(0,dp(42),1f).apply{
+                leftMargin=dp(3)
+                rightMargin=dp(3)
+            }
+        )
+
+        tools.addView(
+            focusButton,
+            LinearLayout.LayoutParams(0,dp(42),1f).apply{
+                leftMargin=dp(3)
+                rightMargin=dp(3)
+            }
+        )
+
+        tools.addView(
+            calBtn,
+            LinearLayout.LayoutParams(0,dp(42),1f).apply{
+                leftMargin=dp(3)
+            }
+        )
+
+        controls.addView(
+            tools,
+            LinearLayout.LayoutParams(-1,-2)
+        )
+
+        val main=LinearLayout(this).apply{
+            gravity=Gravity.CENTER
+            setPadding(0,dp(8),0,0)
+        }
+
+        sequenceButton=button("START ASTRO").apply{
+            setOnClickListener{toggleSequence()}
+        }
+
+        projectButton=button("GALLERY").apply{
+            setOnClickListener{openGallery()}
+        }
+
+        captureButton=button("").apply{
+            contentDescription="Capture RAW"
+
+            setBackgroundResource(
+                com.sari.astro.R.drawable.bg_astro_capture
+            )
+
+            setCompoundDrawablesWithIntrinsicBounds(
+                com.sari.astro.R.drawable.ic_astro_capture,
+                0,
+                0,
+                0
+            )
+
+            gravity=Gravity.CENTER
+            setPadding(0,0,0,0)
+            minWidth=0
+            minimumWidth=0
+            minHeight=0
+            minimumHeight=0
+
+            setOnClickListener{
+                captureFrame(true)
+            }
+        }
+
+        main.addView(
+            sequenceButton,
+            LinearLayout.LayoutParams(dp(106),dp(52)).apply{
+                rightMargin=dp(18)
+            }
+        )
+
+        main.addView(
+            captureButton,
+            LinearLayout.LayoutParams(dp(88),dp(88)
+            )
+        )
+
+        main.addView(
+            projectButton,
+            LinearLayout.LayoutParams(dp(106),dp(52)).apply{
+                leftMargin=dp(18)
+            }
+        )
+
+        controls.addView(main)
+
+        root.addView(
+            controls,
+            FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM)
+        )
+
+        ViewCompat.setOnApplyWindowInsetsListener(root){_,i->
+            val bars=i.getInsets(
+                WindowInsetsCompat.Type.systemBars() or
+                WindowInsetsCompat.Type.displayCutout()
+            )
+
+            top.setPadding(
+                dp(16)+bars.left,
+                dp(10)+bars.top,
+                dp(16)+bars.right,
+                dp(4)
+            )
+
+            controls.setPadding(
+                dp(12)+bars.left,
+                dp(8),
+                dp(12)+bars.right,
+                dp(14)+bars.bottom
+            )
+
+            i
+        }
+
+        setContentView(root)
+    }
+
+    private fun animateCaptureButton(active:Boolean){
+        captureAnimator?.cancel()
+        captureAnimator=null
+
+        captureButton.animate().cancel()
+        captureButton.scaleX=1f
+        captureButton.scaleY=1f
+
+        if(!active)return
+
+        val x=ObjectAnimator.ofFloat(
+            captureButton,
+            View.SCALE_X,
+            1f,
+            1.07f
+        )
+
+        val y=ObjectAnimator.ofFloat(
+            captureButton,
+            View.SCALE_Y,
+            1f,
+            1.07f
+        )
+
+        captureAnimator=AnimatorSet().apply{
+            playTogether(x,y)
+            duration=850
+            x.repeatCount=ObjectAnimator.INFINITE
+            y.repeatCount=ObjectAnimator.INFINITE
+            x.repeatMode=ObjectAnimator.REVERSE
+            y.repeatMode=ObjectAnimator.REVERSE
+            start()
+        }
+    }
+
     private fun hasCameraPermission()=ContextCompat.checkSelfPermission(this,Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED
     private fun openBackCamera(){if(camera!=null||opening)return;val selected=CameraProbe.probe(this).firstOrNull{it.facingBack}?:CameraProbe.probe(this).firstOrNull()?:run{status.text="No camera";return};caps=selected;cameraChars=runCatching{cameraManager.getCameraCharacteristics(selected.id)}.getOrNull();if(cameraChars==null){status.text="Camera unavailable";return};status.text=if(selected.usableForRawAstro)"ASTRO • ${selected.id}" else "ASTRO LIMITED • ${selected.id}";rawText.text=if(selected.rawSupported)"RAW SENSOR • READY" else "RAW UNSUPPORTED";captureButton.isEnabled=selected.usableForRawAstro;sequenceButton.isEnabled=selected.usableForRawAstro;selected.isoRange?.let{iso=iso.coerceIn(it.first,it.last)};selected.exposureNs?.let{r->val u=selected.maxFrameDurationNs?.let{m->minOf(r.last,m)}?:r.last;exposureNs=exposureNs.coerceIn(r.first,max(r.first,u))};updateTexts();writer=Executors.newSingleThreadExecutor{r->Thread(r,"SARI-Writer")};opening=true;runCatching{cameraManager.openCamera(selected.id,stateCallback,cameraHandler)}.onFailure{opening=false;status.text="Camera could not be opened";Toast.makeText(this,it.message?:"Camera error",Toast.LENGTH_LONG).show()}}
     private val stateCallback=object:CameraDevice.StateCallback(){override fun onOpened(c:CameraDevice){opening=false;if(!started){c.close();return};camera=c;createSession()}override fun onDisconnected(c:CameraDevice){opening=false;c.close();camera=null;session=null}override fun onError(c:CameraDevice,e:Int){opening=false;c.close();camera=null;session=null;ui{status.text="Camera error $e"}}}
@@ -77,7 +353,7 @@ class MainActivity : AppCompatActivity() {
     private fun applyPreviewTransform(){val ps=previewSize?:return;val vw=preview.width.toFloat();val vh=preview.height.toFloat();if(vw<=0||vh<=0)return;val ba=minOf(ps.width,ps.height).toFloat()/max(ps.width,ps.height);var dw=vw;var dh=vw/ba;if(dh>vh){dh=vh;dw=vh*ba};preview.setTransform(Matrix().apply{setScale(dw/vw,dh/vh,vw/2f,vh/2f)})}
     private fun updatePreview(){val c=camera?:return;val s=session?:return;val surf=previewSurface?:return;runCatching{val q=c.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply{addTarget(surf);set(CaptureRequest.CONTROL_MODE,CaptureRequest.CONTROL_MODE_AUTO);set(CaptureRequest.CONTROL_AF_MODE,supportedAfMode());set(CaptureRequest.CONTROL_AE_MODE,CaptureRequest.CONTROL_AE_MODE_ON)};s.setRepeatingRequest(q.build(),null,cameraHandler)}}
     private fun supportedAfMode():Int{val m=cameraChars?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)?:intArrayOf();return when{m.contains(CameraCharacteristics.CONTROL_AF_MODE_CONTINUOUS_PICTURE)->CameraCharacteristics.CONTROL_AF_MODE_CONTINUOUS_PICTURE;m.contains(CameraCharacteristics.CONTROL_AF_MODE_AUTO)->CameraCharacteristics.CONTROL_AF_MODE_AUTO;else->CameraCharacteristics.CONTROL_AF_MODE_OFF}}
-    private fun captureFrame(manual:Boolean){val c=camera?:return;val s=session?:return;val raw=rawReader?:return;if(outstanding.get()>0){if(SystemClock.elapsedRealtime()-lastCaptureAtMs>exposureNs/1_000_000L+10000){outstanding.set(0);clearPending()}else{if(manual)Toast.makeText(this,"Previous frame is still saving.",Toast.LENGTH_SHORT).show();return}};clearPending();val af=manualFocus&&caps?.manualFocus==true;try{val req=c.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply{addTarget(raw.surface);set(CaptureRequest.CONTROL_MODE,CaptureRequest.CONTROL_MODE_AUTO);set(CaptureRequest.CONTROL_AE_MODE,CaptureRequest.CONTROL_AE_MODE_OFF);set(CaptureRequest.SENSOR_SENSITIVITY,iso);set(CaptureRequest.SENSOR_EXPOSURE_TIME,exposureNs);set(CaptureRequest.SENSOR_FRAME_DURATION,exposureNs);set(CaptureRequest.CONTROL_AF_MODE,if(af)CameraCharacteristics.CONTROL_AF_MODE_OFF else supportedAfMode());if(af)set(CaptureRequest.LENS_FOCUS_DISTANCE,0f)};outstanding.incrementAndGet();lastCaptureAtMs=SystemClock.elapsedRealtime();s.capture(req.build(),object:CameraCaptureSession.CaptureCallback(){override fun onCaptureCompleted(s:CameraCaptureSession,r:CaptureRequest,res:TotalCaptureResult)=onResult(res);override fun onCaptureFailed(s:CameraCaptureSession,r:CaptureRequest,f:CaptureFailure){releaseOutstanding();failedFrames.incrementAndGet();ui{updateSequenceUi()}}},cameraHandler)}catch(t:Throwable){releaseOutstanding();ui{Toast.makeText(this,t.message?:"Capture failed",Toast.LENGTH_LONG).show()}}}
+    private fun captureFrame(manual:Boolean){val c=camera?:return;val s=session?:return;val raw=rawReader?:return;if(outstanding.get()>0){if(SystemClock.elapsedRealtime()-lastCaptureAtMs>exposureNs/1_000_000L+10000){outstanding.set(0);clearPending()}else{if(manual)Toast.makeText(this,"Previous frame is still saving.",Toast.LENGTH_SHORT).show();return}};clearPending();val af=manualFocus&&caps?.manualFocus==true;try{val req=c.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply{addTarget(raw.surface);set(CaptureRequest.CONTROL_MODE,CaptureRequest.CONTROL_MODE_AUTO);set(CaptureRequest.CONTROL_AE_MODE,CaptureRequest.CONTROL_AE_MODE_OFF);set(CaptureRequest.SENSOR_SENSITIVITY,iso);set(CaptureRequest.SENSOR_EXPOSURE_TIME,exposureNs);set(CaptureRequest.SENSOR_FRAME_DURATION,exposureNs);set(CaptureRequest.CONTROL_AF_MODE,if(af)CameraCharacteristics.CONTROL_AF_MODE_OFF else supportedAfMode());if(af)set(CaptureRequest.LENS_FOCUS_DISTANCE,0f)};outstanding.incrementAndGet();lastCaptureAtMs=SystemClock.elapsedRealtime();ui{animateCaptureButton(true)};s.capture(req.build(),object:CameraCaptureSession.CaptureCallback(){override fun onCaptureCompleted(s:CameraCaptureSession,r:CaptureRequest,res:TotalCaptureResult)=onResult(res);override fun onCaptureFailed(s:CameraCaptureSession,r:CaptureRequest,f:CaptureFailure){releaseOutstanding();failedFrames.incrementAndGet();ui{if(!sequenceRunning)animateCaptureButton(false);updateSequenceUi()}}},cameraHandler)}catch(t:Throwable){releaseOutstanding();ui{if(!sequenceRunning)animateCaptureButton(false);Toast.makeText(this,t.message?:"Capture failed",Toast.LENGTH_LONG).show()}}}
     private fun releaseOutstanding(){outstanding.updateAndGet{if(it>0)it-1 else 0}}
     private fun clearPending(){synchronized(pendingLock){pendingImages.values.forEach{runCatching{it.close()}};pendingImages.clear();pendingResults.clear()}}
     private fun onResult(result:TotalCaptureResult){val ts=result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP)?:0L;val img=synchronized(pendingLock){pendingImages.remove(ts)?.also{}?:run{pendingResults[ts]=result;null}};if(img!=null)dispatchWrite(img,result)}
@@ -142,11 +418,12 @@ class MainActivity : AppCompatActivity() {
                 if(ok)savedFrames.incrementAndGet()
                 else failedFrames.incrementAndGet()
 
-                ui{updateSequenceUi()}
+                ui{if(!sequenceRunning)animateCaptureButton(false);updateSequenceUi()}
             }
         }catch(_:RejectedExecutionException){
             image.close()
             releaseOutstanding()
+            ui{if(!sequenceRunning)animateCaptureButton(false)}
         }
     }
 
