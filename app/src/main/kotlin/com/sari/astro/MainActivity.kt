@@ -152,6 +152,19 @@ class MainActivity : AppCompatActivity() {
 
         top.addView(info)
 
+    status = tv("CAMERA • STARTING", 11f).apply {
+        gravity = Gravity.CENTER
+        setTextColor(Color.rgb(180, 195, 215))
+        setPadding(dp(4), 0, dp(4), 0)
+    }
+
+    top.addView(
+        status,
+        LinearLayout.LayoutParams(-1, dp(22)).apply {
+            topMargin = dp(4)
+        }
+    )
+
         root.addView(
             top,
             FrameLayout.LayoutParams(-1,-2,Gravity.TOP)
