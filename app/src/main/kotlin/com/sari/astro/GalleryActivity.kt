@@ -10,6 +10,10 @@ import android.view.Gravity
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.gms.ads.AdRequest
+import com.google.android.gms.ads.AdSize
+import com.google.android.gms.ads.AdView
+import com.google.android.gms.ads.MobileAds
 import com.sari.astro.nativebridge.NativeCore
 import java.io.File
 import java.util.Locale
@@ -20,6 +24,11 @@ class GalleryActivity : AppCompatActivity() {
     private lateinit var empty: TextView
     private lateinit var subtitle: TextView
     private val work = Executors.newFixedThreadPool(2)
+    private val banners = mutableListOf<AdView>()
+
+    private companion object {
+        const val GALLERY_AD_UNIT = "ca-app-pub-2976745055455782/8025233128"
+    }
 
     private val importLauncher = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNullOrEmpty()) return@registerForActivityResult
@@ -28,12 +37,13 @@ class GalleryActivity : AppCompatActivity() {
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        MobileAds.initialize(this) { }
         buildUi()
         loadProjects()
     }
 
     override fun onResume() { super.onResume(); if (::grid.isInitialized) loadProjects() }
-    override fun onDestroy() { work.shutdownNow(); super.onDestroy() }
+    override fun onDestroy() { work.shutdownNow(); banners.forEach { it.destroy() }; banners.clear(); super.onDestroy() }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density + .5f).toInt()
     private fun bg(color: Int, radius: Int = 16): GradientDrawable = GradientDrawable().apply {
@@ -54,7 +64,7 @@ class GalleryActivity : AppCompatActivity() {
         header.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(TextView(this@GalleryActivity).apply {
-                text = "SARI Astro"; textSize = 23f; setTextColor(Color.WHITE); setTypeface(typeface, 1)
+                text = "SARI ASTRO"; textSize = 23f; setTextColor(Color.WHITE); setTypeface(typeface, 1)
             })
             subtitle = TextView(this@GalleryActivity).apply {
                 text = "Your astrophotography projects"; textSize = 12f; setTextColor(Color.rgb(151, 165, 183))
@@ -84,14 +94,34 @@ class GalleryActivity : AppCompatActivity() {
     }
 
     private fun loadProjects() {
+        banners.forEach { it.destroy() }
+        banners.clear()
         grid.removeAllViews()
         val projects = ProjectRepository.listProjects(this)
         empty.visibility = if (projects.isEmpty()) android.view.View.VISIBLE else android.view.View.GONE
         subtitle.text = if (projects.isEmpty()) "No projects" else "${projects.size} project${if (projects.size == 1) "" else "s"}"
-        for ((index, project) in projects.withIndex()) addProjectCard(project, index)
+        // One small banner spans both columns after every 6 projects; cards keep their 2-column grid.
+        var bannersAdded = 0
+        for ((index, project) in projects.withIndex()) {
+            if (index > 0 && index % 6 == 0) { addGalleryBanner(index / 2 + bannersAdded); bannersAdded++ }
+            addProjectCard(project, index, index / 2 + bannersAdded)
+        }
     }
 
-    private fun addProjectCard(project: ProjectRepository.ProjectInfo, index: Int) {
+    private fun addGalleryBanner(row: Int) {
+        val ad = AdView(this).apply {
+            setAdSize(AdSize.BANNER)
+            adUnitId = GALLERY_AD_UNIT
+        }
+        banners += ad
+        val params = GridLayout.LayoutParams(GridLayout.spec(row), GridLayout.spec(0, 2, GridLayout.CENTER)).apply {
+            setMargins(dp(4), dp(6), dp(4), dp(6))
+        }
+        grid.addView(ad, params)
+        ad.loadAd(AdRequest.Builder().build())
+    }
+
+    private fun addProjectCard(project: ProjectRepository.ProjectInfo, index: Int, row: Int) {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; background = bg(Color.rgb(15, 21, 30), 16); setPadding(dp(8), dp(8), dp(8), dp(8))
             isClickable = true; isFocusable = true
@@ -119,7 +149,7 @@ class GalleryActivity : AppCompatActivity() {
         })
         val params = GridLayout.LayoutParams().apply {
             width = 0; height = GridLayout.LayoutParams.WRAP_CONTENT
-            columnSpec = GridLayout.spec(index % 2, 1f); rowSpec = GridLayout.spec(index / 2)
+            columnSpec = GridLayout.spec(index % 2, 1f); rowSpec = GridLayout.spec(row)
             setMargins(dp(4), dp(4), dp(4), dp(4))
         }
         grid.addView(card, params)

@@ -51,3 +51,17 @@
 - The stacking kernel itself (iterative sigma rejection) was not made faster; the per-pixel allocation fix
   is measurably neutral on desktop. Large stacks remain compute-bound.
 - Gallery and project screens were not redesigned in this pass.
+
+## Round 3 – camera screen, gallery ads, name
+
+- **Camera screen** (`MainActivity.kt`, `ui/CameraOverlay.kt`): brand row forced left-to-right so it reads
+  "SARI ASTRO" (it previously reversed under RTL layout). Status cards show real EXP / ISO / RAW values.
+  Rule-of-thirds grid and centre focus target drawn as a non-interactive overlay. ISO and exposure are now
+  sliders (presets from the connected camera) inside a collapsible CONTROLS panel, with FOCUS and CALIBRATE
+  there. The shutter is a round button with a camera-shutter icon; the active state shows a stop square.
+  Capture, RAW, focus, calibration and gallery logic is unchanged.
+- **Gallery ads** (`GalleryActivity.kt`): one AdMob banner spans both columns after every 6 projects.
+  No ads are shown on the stacking, editor or camera screens. App ID is in the manifest; the ad unit ID is
+  set in `GalleryActivity`. Use test ad units while developing to avoid invalid-traffic issues.
+- **Name**: "SARI ASTRO" in the launcher label, gallery header, settings and camera brand.
+- Protected code (stacking engine, JNI/C++, gallery storage and database, save/load logic) was not modified.

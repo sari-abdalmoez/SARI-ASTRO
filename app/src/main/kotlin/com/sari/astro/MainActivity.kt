@@ -36,6 +36,12 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import android.widget.SeekBar
+import android.content.res.ColorStateList
+import android.graphics.drawable.GradientDrawable
+import com.sari.astro.ui.CameraOverlay
+import com.sari.astro.ui.SariKit
+import com.sari.astro.ui.SariPalette
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -69,240 +75,144 @@ class MainActivity : AppCompatActivity() {
     private fun tv(t:String,s:Float,b:Boolean=false)=TextView(this).apply{text=t;textSize=s;setTextColor(Color.WHITE);if(b)setTypeface(typeface,android.graphics.Typeface.BOLD)}
     private fun pill(t:String)=tv(t,12f).apply{gravity=Gravity.CENTER;setPadding(dp(8),0,dp(8),0);background=com.sari.astro.ui.SariKit(context).surface(0xB30B1220.toInt(),10,0x334FD8F2)}
     private fun button(t:String)=Button(this).apply{text=t;textSize=12f;isAllCaps=false;minHeight=0;minimumHeight=0;setTextColor(Color.WHITE);background=com.sari.astro.ui.SariKit(context).surface(0xE6131C2E.toInt(),12,0x335B6B8C)}
+    private lateinit var isoSlider:SeekBar;private lateinit var expSlider:SeekBar;private lateinit var isoValueView:TextView;private lateinit var expValueView:TextView;private lateinit var controlsPanel:LinearLayout;private lateinit var panelButton:Button;private var syncingControls=false
     private fun buildUi(){
+        val kit=SariKit(this)
         val root=FrameLayout(this).apply{setBackgroundColor(Color.BLACK)}
         preview=TextureView(this)
         root.addView(preview,FrameLayout.LayoutParams(-1,-1))
+        root.addView(CameraOverlay(this),FrameLayout.LayoutParams(-1,-1))
 
-        val top=LinearLayout(this).apply{
-            orientation=LinearLayout.VERTICAL
-            setPadding(dp(16),dp(10),dp(16),dp(4))
-        }
+        // Top: brand (always left-to-right) and live status cards.
+        val top=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(16),dp(10),dp(16),dp(8))}
+        val brandRow=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;layoutDirection=View.LAYOUT_DIRECTION_LTR}
+        brandRow.addView(View(this).apply{background=kit.surface(SariPalette.ACCENT,3,null)},LinearLayout.LayoutParams(dp(6),dp(6)).apply{rightMargin=dp(8)})
+        brandRow.addView(tv("SARI",15f,true).apply{letterSpacing=.16f})
+        brandRow.addView(tv("ASTRO",15f,true).apply{letterSpacing=.16f;setTextColor(SariPalette.ACCENT)},LinearLayout.LayoutParams(-2,-2).apply{leftMargin=dp(6)})
+        top.addView(brandRow)
+        status=tv("CAMERA • STARTING",11f).apply{setTextColor(SariPalette.TEXT_MUTED);setPadding(0,dp(2),0,0)}
+        top.addView(status)
+        val cards=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;setPadding(0,dp(10),0,0)}
+        rawText=statusCard(kit,"RAW — CHECKING");isoText=statusCard(kit,"ISO —");exposureText=statusCard(kit,"EXP —")
+        cards.addView(rawText,LinearLayout.LayoutParams(0,dp(34),1f).apply{rightMargin=dp(4)})
+        cards.addView(isoText,LinearLayout.LayoutParams(0,dp(34),1f).apply{leftMargin=dp(4);rightMargin=dp(4)})
+        cards.addView(exposureText,LinearLayout.LayoutParams(0,dp(34),1f).apply{leftMargin=dp(4)})
+        top.addView(cards)
+        root.addView(top,FrameLayout.LayoutParams(-1,-2,Gravity.TOP))
 
-        val brand=LinearLayout(this).apply{
-            orientation=LinearLayout.VERTICAL
-            gravity=Gravity.CENTER_HORIZONTAL
-        }
+        // Bottom: collapsible control panel plus the main shutter row.
+        val controls=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER_HORIZONTAL;setPadding(dp(12),dp(8),dp(12),dp(14))}
+        controlsPanel=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;background=kit.surface(0xE60B1220.toInt(),18,0x335B6B8C);setPadding(dp(14),dp(12),dp(14),dp(8));visibility=View.GONE}
+        val isoPair=sliderBlock(kit,"ISO"){p->isoPresets().getOrNull(p)?.let{iso=it;updateTexts()}}
+        isoSlider=isoPair.first;isoValueView=isoPair.second
+        val expPair=sliderBlock(kit,"EXPOSURE"){p->exposurePresets().getOrNull(p)?.let{exposureNs=it;updateTexts()}}
+        expSlider=expPair.first;expValueView=expPair.second
+        val tools=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        focusButton=button("∞ FOCUS").apply{setOnClickListener{toggleFocus()}}
+        val calBtn=button("CALIBRATE").apply{setOnClickListener{chooseCalibration()}}
+        tools.addView(focusButton,LinearLayout.LayoutParams(0,dp(48),1f).apply{rightMargin=dp(5)})
+        tools.addView(calBtn,LinearLayout.LayoutParams(0,dp(48),1f).apply{leftMargin=dp(5)})
+        controlsPanel.addView(tools,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(4)})
+        controls.addView(controlsPanel,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(12)})
 
-        val brandRow=LinearLayout(this).apply{gravity=Gravity.CENTER}
-
-        val sari=tv("SARI",18f,true).apply{
-            setTextColor(Color.WHITE)
-            letterSpacing=.08f
-        }
-
-        val astro=tv("ASTRO",18f,true).apply{
-            setTextColor(Color.rgb(79,216,242))
-            letterSpacing=.08f
-        }
-
-        brandRow.addView(sari,LinearLayout.LayoutParams(-2,-2))
-        brandRow.addView(
-            astro,
-            LinearLayout.LayoutParams(-2,-2).apply{leftMargin=dp(7)}
-        )
-
-        brand.addView(brandRow,LinearLayout.LayoutParams(-1,-2))
-
-        val line=View(this).apply{
-            setBackgroundColor(Color.rgb(79,216,242))
-        }
-
-        brand.addView(
-            line,
-            LinearLayout.LayoutParams(dp(48),dp(3)).apply{
-                topMargin=dp(4)
-            }
-        )
-
-        top.addView(brand,LinearLayout.LayoutParams(-1,-2))
-
-        val info=LinearLayout(this).apply{
-            gravity=Gravity.CENTER
-            setPadding(0,dp(7),0,0)
-        }
-
-        rawText=pill("RAW — CHECKING")
-        isoText=pill("ISO —")
-        exposureText=pill("EXP —")
-
-        info.addView(
-            rawText,
-            LinearLayout.LayoutParams(0,dp(32),1f).apply{
-                rightMargin=dp(3)
-            }
-        )
-
-        info.addView(
-            isoText,
-            LinearLayout.LayoutParams(0,dp(32),1f).apply{
-                leftMargin=dp(3)
-                rightMargin=dp(3)
-            }
-        )
-
-        info.addView(
-            exposureText,
-            LinearLayout.LayoutParams(0,dp(32),1f).apply{
-                leftMargin=dp(3)
-            }
-        )
-
-        top.addView(info)
-
-    status = tv("CAMERA • STARTING", 11f).apply {
-        gravity = Gravity.CENTER
-        setTextColor(Color.rgb(180, 195, 215))
-        setPadding(dp(4), 0, dp(4), 0)
-    }
-
-    top.addView(
-        status,
-        LinearLayout.LayoutParams(-1, dp(22)).apply {
-            topMargin = dp(4)
-        }
-    )
-
-        root.addView(
-            top,
-            FrameLayout.LayoutParams(-1,-2,Gravity.TOP)
-        )
-
-        val controls=LinearLayout(this).apply{
-            orientation=LinearLayout.VERTICAL
-            gravity=Gravity.CENTER_HORIZONTAL
-            setPadding(dp(12),dp(8),dp(12),dp(14))
-        }
-
-        val tools=LinearLayout(this).apply{
-            gravity=Gravity.CENTER
-        }
-
-        val isoBtn=button("ISO").apply{
-            setOnClickListener{cycleIso()}
-        }
-
-        val expBtn=button("EXPOSURE").apply{
-            setOnClickListener{cycleExposure()}
-        }
-
-        focusButton=button("∞ FOCUS").apply{
-            setOnClickListener{toggleFocus()}
-        }
-
-        val calBtn=button("CALIBRATE").apply{
-            setOnClickListener{chooseCalibration()}
-        }
-
-        tools.addView(
-            isoBtn,
-            LinearLayout.LayoutParams(0,dp(42),1f).apply{
-                rightMargin=dp(3)
-            }
-        )
-
-        tools.addView(
-            expBtn,
-            LinearLayout.LayoutParams(0,dp(42),1f).apply{
-                leftMargin=dp(3)
-                rightMargin=dp(3)
-            }
-        )
-
-        tools.addView(
-            focusButton,
-            LinearLayout.LayoutParams(0,dp(42),1f).apply{
-                leftMargin=dp(3)
-                rightMargin=dp(3)
-            }
-        )
-
-        tools.addView(
-            calBtn,
-            LinearLayout.LayoutParams(0,dp(42),1f).apply{
-                leftMargin=dp(3)
-            }
-        )
-
-        controls.addView(
-            tools,
-            LinearLayout.LayoutParams(-1,-2)
-        )
-
-        val main=LinearLayout(this).apply{
-            gravity=Gravity.CENTER
-            setPadding(0,dp(8),0,0)
-        }
-
-        projectButton=button("GALLERY").apply{
-            setOnClickListener{openGallery()}
-        }
-
-        captureButton=button("").apply{
+        val main=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL;orientation=LinearLayout.HORIZONTAL}
+        projectButton=button("GALLERY").apply{setOnClickListener{openGallery()}}
+        panelButton=button("CONTROLS").apply{setOnClickListener{togglePanel()}}
+        captureButton=Button(this).apply{
+            text="";isAllCaps=false;minHeight=0;minimumHeight=0;minWidth=0;minimumWidth=0
+            setPadding(0,0,0,0);gravity=Gravity.CENTER
+            background=GradientDrawable().apply{shape=GradientDrawable.OVAL;setColor(0xFF0C1322.toInt());setStroke(dp(3),SariPalette.ACCENT)}
             contentDescription="Start Astro"
-            setBackgroundResource(com.sari.astro.R.drawable.bg_astro_capture)
-            setCompoundDrawablesWithIntrinsicBounds(com.sari.astro.R.drawable.ic_astro_capture,0,0,0)
-            gravity=Gravity.CENTER
-            setPadding(0,0,0,0)
-            minWidth=0
-            minimumWidth=0
-            minHeight=0
-            minimumHeight=0
             setOnClickListener{toggleSequence()}
         }
-
-        main.addView(
-            captureButton,
-            LinearLayout.LayoutParams(dp(82),dp(82))
-        )
-
-        main.addView(
-            projectButton,
-            LinearLayout.LayoutParams(dp(106),dp(52)).apply{
-                leftMargin=dp(18)
-            }
-        )
-
-        controls.addView(main)
-
-        root.addView(
-            controls,
-            FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM)
-        )
+        main.addView(projectButton,LinearLayout.LayoutParams(0,dp(48),1f).apply{rightMargin=dp(10)})
+        main.addView(captureButton,LinearLayout.LayoutParams(dp(84),dp(84)))
+        main.addView(panelButton,LinearLayout.LayoutParams(0,dp(48),1f).apply{leftMargin=dp(10)})
+        controls.addView(main,LinearLayout.LayoutParams(-1,-2))
+        setAstroButtonState(false)
+        root.addView(controls,FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
 
         ViewCompat.setOnApplyWindowInsetsListener(root){_,i->
-            val bars=i.getInsets(
-                WindowInsetsCompat.Type.systemBars() or
-                WindowInsetsCompat.Type.displayCutout()
-            )
-
-            top.setPadding(
-                dp(16)+bars.left,
-                dp(10)+bars.top,
-                dp(16)+bars.right,
-                dp(4)
-            )
-
-            controls.setPadding(
-                dp(12)+bars.left,
-                dp(8),
-                dp(12)+bars.right,
-                dp(14)+bars.bottom
-            )
-
+            val bars=i.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            top.setPadding(dp(16)+bars.left,dp(10)+bars.top,dp(16)+bars.right,dp(8))
+            controls.setPadding(dp(12)+bars.left,dp(8),dp(12)+bars.right,dp(14)+bars.bottom)
             i
         }
-
+        syncControls()
         setContentView(root)
+    }
+
+    private fun statusCard(kit:SariKit,text:String):TextView=kit.text(text,11f,SariPalette.TEXT,true).apply{
+        gravity=Gravity.CENTER
+        background=kit.surface(0xCC0C1322.toInt(),10,0x335B6B8C)
+    }
+
+    private fun sliderBlock(kit:SariKit,title:String,onPick:(Int)->Unit):Pair<SeekBar,TextView>{
+        val block=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(0,0,0,dp(8))}
+        val head=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
+        head.addView(kit.section(title),LinearLayout.LayoutParams(0,-2,1f))
+        val value=kit.text("--",13f,SariPalette.ACCENT,true)
+        head.addView(value)
+        block.addView(head)
+        val bar=SeekBar(this).apply{
+            progressTintList=ColorStateList.valueOf(SariPalette.ACCENT)
+            thumbTintList=ColorStateList.valueOf(SariPalette.ACCENT)
+            setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{
+                override fun onProgressChanged(s:SeekBar?,p:Int,fromUser:Boolean){if(fromUser&&!syncingControls)onPick(p)}
+                override fun onStartTrackingTouch(s:SeekBar?)=Unit
+                override fun onStopTrackingTouch(s:SeekBar?)=Unit
+            })
+        }
+        block.addView(bar,LinearLayout.LayoutParams(-1,dp(48)))
+        controlsPanel.addView(block)
+        return Pair(bar,value)
+    }
+
+    private fun togglePanel(){
+        val open=controlsPanel.visibility!=View.VISIBLE
+        controlsPanel.visibility=if(open)View.VISIBLE else View.GONE
+        panelButton.text=if(open)"HIDE" else "CONTROLS"
+    }
+
+    /** ISO presets offered by the connected camera (same list the cycle button uses). */
+    private fun isoPresets():List<Int>{
+        val r=caps?.isoRange?:return emptyList()
+        return listOf(100,200,400,800,1600,3200,6400).filter{it in r}
+    }
+
+    /** Exposure presets offered by the connected camera (same list the cycle button uses). */
+    private fun exposurePresets():List<Long>{
+        val r=caps?.exposureNs?:return emptyList()
+        val mf=caps?.maxFrameDurationNs
+        val presets=mutableListOf(500_000_000L,1_000_000_000L,2_000_000_000L,4_000_000_000L,5_000_000_000L,6_000_000_000L,7_000_000_000L,8_000_000_000L,10_000_000_000L,12_000_000_000L,15_000_000_000L)
+        val maxSupported=mf?.let{minOf(it,r.last)}?:r.last
+        if(maxSupported>15_000_000_000L)presets+=maxSupported
+        return presets.distinct().filter{it in r&&(mf==null||it<=mf)}.sorted()
+    }
+
+    /** Keeps slider positions and value labels aligned with the real camera values. */
+    private fun syncControls(){
+        if(!::isoSlider.isInitialized||!::expSlider.isInitialized)return
+        syncingControls=true
+        try{
+            val isos=isoPresets()
+            isoSlider.max=max(0,isos.size-1)
+            isoSlider.progress=isos.indices.minByOrNull{kotlin.math.abs(isos[it]-iso)}?:0
+            isoSlider.isEnabled=isos.size>1
+            isoValueView.text="$iso"
+            val exps=exposurePresets()
+            expSlider.max=max(0,exps.size-1)
+            expSlider.progress=exps.indices.minByOrNull{kotlin.math.abs(exps[it]-exposureNs)}?:0
+            expSlider.isEnabled=exps.size>1
+            expValueView.text=if(exposureNs>=1_000_000_000L)String.format(Locale.US,"%.1fs",exposureNs/1e9)else String.format(Locale.US,"%.0fms",exposureNs/1e6)
+        }finally{syncingControls=false}
     }
 
     private fun setAstroButtonState(active:Boolean){
         captureButton.isSelected=active
-        captureButton.setCompoundDrawablesWithIntrinsicBounds(
-            if(active) com.sari.astro.R.drawable.ic_astro_stop else com.sari.astro.R.drawable.ic_astro_capture,
-            0,0,0
-        )
-        captureButton.contentDescription=if(active) "Stop Astro" else "Start Astro"
+        captureButton.setCompoundDrawablesWithIntrinsicBounds(0,if(active)com.sari.astro.R.drawable.ic_stop_square else com.sari.astro.R.drawable.ic_shutter,0,0)
+        (captureButton.background as? GradientDrawable)?.setStroke(dp(3),if(active)SariPalette.VIOLET else SariPalette.ACCENT)
+        captureButton.contentDescription=if(active)"Stop Astro" else "Start Astro"
     }
 
     private fun hasCameraPermission()=ContextCompat.checkSelfPermission(this,Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED
@@ -426,7 +336,7 @@ class MainActivity : AppCompatActivity() {
 
         updateTexts()
     }
-    private fun updateTexts(){isoText.text="ISO $iso";exposureText.text="EXP ${if(exposureNs>=1_000_000_000L)String.format(Locale.US,"%.1fs",exposureNs/1e9)else String.format(Locale.US,"%.0fms",exposureNs/1e6)}"}
+    private fun updateTexts(){syncControls();isoText.text="ISO $iso";exposureText.text="EXP ${if(exposureNs>=1_000_000_000L)String.format(Locale.US,"%.1fs",exposureNs/1e9)else String.format(Locale.US,"%.0fms",exposureNs/1e6)}"}
     private fun chooseCalibration(){if(sequenceRunning){Toast.makeText(this,"Stop the sequence first.",Toast.LENGTH_SHORT).show();return};val names=arrayOf("LIGHT (normal)","DARK","FLAT","BIAS");AlertDialog.Builder(this).setTitle("Capture type").setItems(names){_,which->captureKind=when(which){1->ProjectRepository.FrameType.DARK;2->ProjectRepository.FrameType.FLAT;3->ProjectRepository.FrameType.BIAS;else->ProjectRepository.FrameType.LIGHT};captureButton.contentDescription="Capture " + captureKind.name;status.text=if(captureKind==ProjectRepository.FrameType.LIGHT)"ASTRO • LIGHT FRAME" else "CALIBRATION • ${captureKind.name}"}.show()}
     private fun openGallery(){startActivity(Intent(this,GalleryActivity::class.java))}
     private fun closeCamera() {

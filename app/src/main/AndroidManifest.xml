@@ -1,14 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.raw" android:required="false" />
     <application
         android:allowBackup="false"
-        android:label="SARI Astro"
+        android:label="SARI ASTRO"
         android:supportsRtl="true"
         android:theme="@style/Theme.Sari">
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-2976745055455782~6851752255" />
         <activity android:name=".EditorActivity" android:screenOrientation="portrait" />
         <activity android:name=".ProcessingActivity" android:screenOrientation="portrait" />
         <activity android:name=".GalleryActivity" android:screenOrientation="portrait" />
