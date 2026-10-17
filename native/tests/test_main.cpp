@@ -6,6 +6,7 @@
 #include "../export/export.h"
 #include "../quality/quality.h"
 #include "../stacking/stacking.h"
+#include "../core/tone.h"
 using namespace sari;
 static int g_fail = 0;
 #define CHECK(c, ...) do { if (!(c)) { ++g_fail; std::printf("  FAIL %s:%d %s  ", __FILE__, __LINE__, #c); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
@@ -108,4 +109,15 @@ static void testFullExport() {
   std::remove(f32); std::remove(png); std::remove(fits);
 }
 
-int main() { testStarsAndRegistration(); testStacking(); testRejection(); testTilingResumeCancel(); testFileSource(); testBudget(); testQuality(); testFullExport(); std::printf(g_fail ? "\n%d FAILURES\n" : "\nALL TESTS PASSED\n", g_fail); return g_fail ? 1 : 0; }
+
+static void testTone() {
+  std::printf("[tone]\n");
+  float r = 0.6f, g = 0.3f, b = 0.1f; Tone gray; gray.saturation = 0.f; applyTone(r, g, b, gray);
+  CHECK(std::fabs(r - g) < 1e-6f && std::fabs(g - b) < 1e-6f, "saturation 0 must be monochrome");
+  float a = 0.25f, c = 0.25f, d = 0.25f; Tone lift; lift.nebula = 1.f; applyTone(a, c, d, lift);
+  CHECK(a > 0.25f && a <= 1.f, "nebula lift brightens faint signal");
+  float e = 0.5f, f = 0.5f, h = 0.5f; Tone bright; bright.brightness = 9.f; applyTone(e, f, h, bright);
+  CHECK(e <= 1.f && e >= 0.f, "brightness is clamped");
+}
+
+int main() { testStarsAndRegistration(); testStacking(); testRejection(); testTilingResumeCancel(); testFileSource(); testBudget(); testQuality(); testFullExport(); testTone(); std::printf(g_fail ? "\n%d FAILURES\n" : "\nALL TESTS PASSED\n", g_fail); return g_fail ? 1 : 0; }

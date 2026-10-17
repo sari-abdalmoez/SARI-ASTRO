@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include "../core/image.h"
+#include "../core/tone.h"
 namespace sari {
 struct PipelineFrameReport {
   int index=0; bool included=false; int stars=0; float fwhm=0,roundness=0,noise=0,snr=0,score=0; int inliers=0; double rms=0; std::string reason;
@@ -17,5 +18,7 @@ Status stackProject(const std::vector<std::string>& lightPaths,
                    const std::function<bool(int,int)>& cancelOrContinue,
                    PipelineReport& out);
 Status renderPreview(const std::string& f32Path,int W,int H,int cfa,int mode,float stretch,float denoise,int maxDim,
+                     std::vector<uint8_t>& rgba,int& outW,int& outH);
+Status renderPreview(const std::string& f32Path,int W,int H,int cfa,int mode,float stretch,float denoise,const Tone& tone,int maxDim,
                      std::vector<uint8_t>& rgba,int& outW,int& outH);
 }

@@ -67,8 +67,8 @@ class MainActivity : AppCompatActivity() {
     override fun onStart(){super.onStart();started=true;if(!hasCameraPermission()){val p=mutableListOf(Manifest.permission.CAMERA);if(Build.VERSION.SDK_INT<=28)p+=Manifest.permission.WRITE_EXTERNAL_STORAGE;permissionLauncher.launch(p.toTypedArray())}else if(preview.isAvailable)openBackCamera()}
     private fun dp(v:Int)=(v*resources.displayMetrics.density+.5f).toInt();private fun ui(block:()->Unit){if(isFinishing||isDestroyed)return;runOnUiThread{if(!isFinishing&&!isDestroyed)block()}}
     private fun tv(t:String,s:Float,b:Boolean=false)=TextView(this).apply{text=t;textSize=s;setTextColor(Color.WHITE);if(b)setTypeface(typeface,android.graphics.Typeface.BOLD)}
-    private fun pill(t:String)=tv(t,12f).apply{gravity=Gravity.CENTER;setPadding(dp(8),0,dp(8),0);setBackgroundColor(0x88000000.toInt())}
-    private fun button(t:String)=Button(this).apply{text=t;textSize=12f;isAllCaps=false;minHeight=0;minimumHeight=0;setTextColor(Color.WHITE);setBackgroundColor(0xCC141A24.toInt())}
+    private fun pill(t:String)=tv(t,12f).apply{gravity=Gravity.CENTER;setPadding(dp(8),0,dp(8),0);background=com.sari.astro.ui.SariKit(context).surface(0xB30B1220.toInt(),10,0x334FD8F2)}
+    private fun button(t:String)=Button(this).apply{text=t;textSize=12f;isAllCaps=false;minHeight=0;minimumHeight=0;setTextColor(Color.WHITE);background=com.sari.astro.ui.SariKit(context).surface(0xE6131C2E.toInt(),12,0x335B6B8C)}
     private fun buildUi(){
         val root=FrameLayout(this).apply{setBackgroundColor(Color.BLACK)}
         preview=TextureView(this)
@@ -92,7 +92,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val astro=tv("ASTRO",18f,true).apply{
-            setTextColor(Color.rgb(25,118,255))
+            setTextColor(Color.rgb(79,216,242))
             letterSpacing=.08f
         }
 
@@ -105,7 +105,7 @@ class MainActivity : AppCompatActivity() {
         brand.addView(brandRow,LinearLayout.LayoutParams(-1,-2))
 
         val line=View(this).apply{
-            setBackgroundColor(Color.rgb(25,118,255))
+            setBackgroundColor(Color.rgb(79,216,242))
         }
 
         brand.addView(

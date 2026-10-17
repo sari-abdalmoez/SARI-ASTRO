@@ -1,4 +1,5 @@
 #include "export.h"
+#include "../core/tone.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -153,7 +154,7 @@ static void beFloat(std::ostream&out,float v){uint32_t u=0;std::memcpy(&u,&v,4);
 
 } // namespace
 
-Status exportFullPng(const std::string&f32Path,int W,int H,int cfa,int mode,float stretch,float denoiseStrength,const std::string&outputPath){
+Status exportFullPng(const std::string&f32Path,int W,int H,int cfa,int mode,float stretch,float denoiseStrength,const Tone&tone,const std::string&outputPath){
     if(f32Path.empty()||outputPath.empty()||W<=0||H<=0) return Status::InvalidArgument;
     F32FileSource src(f32Path.c_str(),W,H);
     if(!src.ok()) return Status::IoError;
@@ -162,13 +163,17 @@ Status exportFullPng(const std::string&f32Path,int W,int H,int cfa,int mode,floa
     std::vector<uint8_t> ihdr(13);ihdr[0]=(uint8_t)(W>>24);ihdr[1]=(uint8_t)(W>>16);ihdr[2]=(uint8_t)(W>>8);ihdr[3]=(uint8_t)W;ihdr[4]=(uint8_t)(H>>24);ihdr[5]=(uint8_t)(H>>16);ihdr[6]=(uint8_t)(H>>8);ihdr[7]=(uint8_t)H;ihdr[8]=16;ihdr[9]=2;writeChunk(out,"IHDR",ihdr);
     const int radius=2,strip=64;std::vector<float>buf((size_t)W*(strip+radius*2)),dbuf(buf.size());std::vector<uint8_t>row((size_t)1+(size_t)W*6);uint32_t adler=1;bool first=true;
     for(int y0=0;y0<H;y0+=strip){int yStart=std::max(0,y0-radius),yEnd=std::min(H,y0+strip+radius),readH=yEnd-yStart;if(src.readRegion(0,yStart,W,readH,buf.data())!=Status::Ok)return Status::IoError;dbuf=buf;if(denoiseStrength>0.f){for(int yy=yStart;yy<yEnd;++yy)for(int x=0;x<W;++x)dbuf[(size_t)(yy-yStart)*W+x]=filteredRaw(buf,W,yStart,readH,cfa,x,yy,noise,denoiseStrength);}
-        const int rows=std::min(strip,H-y0);for(int y=0;y<rows;++y){row[0]=0;int gy=y0+y;for(int x=0;x<W;++x){float rr,gg,bb;if(mode==0){float v=valueAt(dbuf,W,yStart,readH,x,gy);rr=gg=bb=v;}else{rr=demosaicChannel(dbuf,W,yStart,readH,cfa,x,gy,0)*gainR;gg=demosaicChannel(dbuf,W,yStart,readH,cfa,x,gy,1)*gainG;bb=demosaicChannel(dbuf,W,yStart,readH,cfa,x,gy,2)*gainB;}rr=stretchValue(rr,lo,hi,stretch);gg=stretchValue(gg,lo,hi,stretch);bb=stretchValue(bb,lo,hi,stretch);if(mode==2){rr=std::pow(std::max(0.f,rr),.94f);gg=std::pow(std::max(0.f,gg),.94f);bb=std::pow(std::max(0.f,bb),.94f);}uint16_t R=(uint16_t)std::lround(std::max(0.f,std::min(1.f,rr))*65535.f),G=(uint16_t)std::lround(std::max(0.f,std::min(1.f,gg))*65535.f),B=(uint16_t)std::lround(std::max(0.f,std::min(1.f,bb))*65535.f);size_t p=1+(size_t)x*6;row[p]=(uint8_t)(R>>8);row[p+1]=(uint8_t)R;row[p+2]=(uint8_t)(G>>8);row[p+3]=(uint8_t)G;row[p+4]=(uint8_t)(B>>8);row[p+5]=(uint8_t)B;}
+        const int rows=std::min(strip,H-y0);for(int y=0;y<rows;++y){row[0]=0;int gy=y0+y;for(int x=0;x<W;++x){float rr,gg,bb;if(mode==0){float v=valueAt(dbuf,W,yStart,readH,x,gy);rr=gg=bb=v;}else{rr=demosaicChannel(dbuf,W,yStart,readH,cfa,x,gy,0)*gainR;gg=demosaicChannel(dbuf,W,yStart,readH,cfa,x,gy,1)*gainG;bb=demosaicChannel(dbuf,W,yStart,readH,cfa,x,gy,2)*gainB;}rr=stretchValue(rr,lo,hi,stretch);gg=stretchValue(gg,lo,hi,stretch);bb=stretchValue(bb,lo,hi,stretch);if(mode==2){rr=std::pow(std::max(0.f,rr),.94f);gg=std::pow(std::max(0.f,gg),.94f);bb=std::pow(std::max(0.f,bb),.94f);}applyTone(rr,gg,bb,tone);uint16_t R=(uint16_t)std::lround(std::max(0.f,std::min(1.f,rr))*65535.f),G=(uint16_t)std::lround(std::max(0.f,std::min(1.f,gg))*65535.f),B=(uint16_t)std::lround(std::max(0.f,std::min(1.f,bb))*65535.f);size_t p=1+(size_t)x*6;row[p]=(uint8_t)(R>>8);row[p+1]=(uint8_t)R;row[p+2]=(uint8_t)(G>>8);row[p+3]=(uint8_t)G;row[p+4]=(uint8_t)(B>>8);row[p+5]=(uint8_t)B;}
             adler=adler32Update(adler,row.data(),row.size());size_t off=0;while(off<row.size()){size_t take=std::min<size_t>(65535,row.size()-off);std::vector<uint8_t>block(row.begin()+off,row.begin()+off+take);writeStoredIdat(out,block,first);first=false;off+=take;}
         }
     }
     std::vector<uint8_t>fin={0x01,0x00,0x00,0xff,0xff,(uint8_t)(adler>>24),(uint8_t)(adler>>16),(uint8_t)(adler>>8),(uint8_t)adler};writeChunk(out,"IDAT",fin);writeChunk(out,"IEND",{});return out.good()?Status::Ok:Status::IoError;
 }
 
+
+Status exportFullPng(const std::string&f32Path,int W,int H,int cfa,int mode,float stretch,float denoiseStrength,const std::string&outputPath){
+    return exportFullPng(f32Path,W,H,cfa,mode,stretch,denoiseStrength,Tone(),outputPath);
+}
 
 Status exportLinearFits(const std::string&f32Path,int W,int H,int cfa,const std::string&outputPath){
     if(f32Path.empty()||outputPath.empty()||W<=0||H<=0)return Status::InvalidArgument;
