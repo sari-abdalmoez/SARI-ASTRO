@@ -263,33 +263,6 @@ Status renderPreview(const std::string&f32Path,int W,int H,int cfa,int mode,floa
   }for(int y=0;y<outH;++y)for(int x=0;x<outW;++x){float r,g,b;int rawX=std::min(W-1,x*factor),rawY=std::min(H-1,y*factor);float center=p.at(x,y);if(mode==0){r=g=b=stretchValue(center,lo,hi,stretch);}else{r=channelAt(p,cfa,x,y,0)*gainR;g=channelAt(p,cfa,x,y,1)*gainG;b=channelAt(p,cfa,x,y,2)*gainB;r=stretchValue(r,lo,hi,stretch);g=stretchValue(g,lo,hi,stretch);b=stretchValue(b,lo,hi,stretch);if(mode==2){r=std::pow(std::max(0.f,std::min(1.f,r)),.92f);g=std::pow(std::max(0.f,std::min(1.f,g)),.92f);b=std::pow(std::max(0.f,std::min(1.f,b)),.92f);}}size_t i=((size_t)y*outW+x)*4;rgba[i]=(uint8_t)(std::max(0.f,std::min(1.f,r))*255);rgba[i+1]=(uint8_t)(std::max(0.f,std::min(1.f,g))*255);rgba[i+2]=(uint8_t)(std::max(0.f,std::min(1.f,b))*255);rgba[i+3]=255;(void)rawX;(void)rawY;}
   return Status::Ok;
 }
-static float rawAt(const Plane&p,int x,int y){x=std::max(0,std::min(p.w-1,x));y=std::max(0,std::min(p.h-1,y));return p.at(x,y);}
-static int cfaColor(int cfa,int x,int y){int px=x&1,py=y&1;switch(cfa&3){case 0: return (py==0&&px==0)?0:((py==1&&px==1)?2:1); // RGGB
-case 1: return (py==0&&px==1)?0:((py==1&&px==0)?2:1); // GRBG
-case 2: return (py==0&&px==0)?1:((py==1&&px==1)?1:((py==0)?2:0)); // GBRG
-case 3: return (py==0&&px==0)?2:((py==1&&px==1)?0:1); // BGGR
-default:return 1;}}
-static float channelAt(const Plane&p,int cfa,int x,int y,int want){
-  const int here=cfaColor(cfa,x,y); const float c=rawAt(p,x,y);
-  if(here==want)return c;
-  auto clamp=[](float v){return std::max(0.f,std::min(1.f,v));};
-  if(want==1 && here!=1){
-    const float l=rawAt(p,x-1,y),r=rawAt(p,x+1,y),u=rawAt(p,x,y-1),d=rawAt(p,x,y+1);
-    const float l2=rawAt(p,x-2,y),r2=rawAt(p,x+2,y),u2=rawAt(p,x,y-2),d2=rawAt(p,x,y+2);
-    const float gh=.5f*(l+r)+.25f*(2.f*c-l2-r2);
-    const float gv=.5f*(u+d)+.25f*(2.f*c-u2-d2);
-    const float gradH=std::fabs(l-r)+.5f*std::fabs(l2-r2);
-    const float gradV=std::fabs(u-d)+.5f*std::fabs(u2-d2);
-    return clamp(gradH<=gradV?gh:gv);
-  }
-  if(here==1){
-    bool horizontal=cfaColor(cfa,x-1,y)==want || cfaColor(cfa,x+1,y)==want;
-    const float a=horizontal?0.5f*(rawAt(p,x-1,y)+rawAt(p,x+1,y)):0.5f*(rawAt(p,x,y-1)+rawAt(p,x,y+1));
-    return clamp(a);
-  }
-  return clamp(.25f*(rawAt(p,x-1,y-1)+rawAt(p,x+1,y-1)+rawAt(p,x-1,y+1)+rawAt(p,x+1,y+1)));
-}
-static float stretchValue(float v,float lo,float hi,float amount){if(!(hi>lo))return 0.f;float x=std::max(0.f,std::min(1.f,(v-lo)/(hi-lo)));float a=std::max(.1f,amount);return std::asinh(a*x)/std::asinh(a);}
 Status renderPreview(const std::string&f32Path,int W,int H,int cfa,int mode,float stretch,float denoise,const Tone&tone,int maxDim,std::vector<uint8_t>&rgba,int&outW,int&outH){F32FileSource src(f32Path.c_str(),W,H);if(!src.ok())return Status::IoError;if(W<=0||H<=0)return Status::InvalidArgument;int factor=std::max(1,(std::max(W,H)+maxDim-1)/maxDim);if(factor>1&&factor&1)++factor;outW=(W+factor-1)/factor;outH=(H+factor-1)/factor;Plane p(outW,outH);std::vector<float>row(W*std::min(H,64));for(int oy=0;oy<outH;oy+=64){int hh=std::min(64,outH-oy);int sy=oy*factor;int rh=std::min(H-sy,std::max(1,hh*factor));row.resize((size_t)W*rh);Status s=src.readRegion(0,sy,W,rh,row.data());if(s!=Status::Ok)return s;for(int y=0;y<hh;++y){int rawY=std::min(H-1,(oy+y)*factor);for(int x=0;x<outW;++x){int rawX=std::min(W-1,x*factor);p.at(x,oy+y)=row[(size_t)(rawY-sy)*W+(rawX)];}}}
   std::vector<float> sample;sample.reserve(65536);for(int y=0;y<p.h;y+=std::max(1,p.h/256))for(int x=0;x<p.w;x+=std::max(1,p.w/256)){float v=p.at(x,y);if(std::isfinite(v))sample.push_back(v);if(sample.size()>=65536)break;}if(sample.empty())return Status::InvalidArgument;auto q=[&](double qv){std::vector<float>a=sample;size_t k=(size_t)std::min<double>(a.size()-1,qv*(a.size()-1));std::nth_element(a.begin(),a.begin()+k,a.end());return a[k];};float lo=q(.005),hi=q(.995);if(!(hi>lo))hi=lo+1e-3f;
   float gainR=1,gainG=1,gainB=1;if(mode!=0){double sr=0,sg=0,sb=0;int nr=0,ng=0,nb=0;for(int y=0;y<p.h;y+=3)for(int x=0;x<p.w;x+=3){float v=p.at(x,y);int c=cfaColor(cfa,x*factor,y*factor);if(v>.02f&&v<.8f){if(c==0){sr+=v;++nr;}else if(c==1){sg+=v;++ng;}else if(c==2){sb+=v;++nb;}}}double g=ng?sg/ng:1;if(nr)gainR=(float)std::max(.6,std::min(1.7,g/(sr/nr)));if(nb)gainB=(float)std::max(.6,std::min(1.7,g/(sb/nb)));}
