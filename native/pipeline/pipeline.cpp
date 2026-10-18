@@ -4,7 +4,6 @@
 #include "../registration/registration.h"
 #include "../stacking/stacking.h"
 #include "../stars/stars.h"
-#include "../core/tone.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -53,7 +52,6 @@ static Status readProxy(PlaneSource& src, int factor, Plane& out) {
 
 struct CalibratedSource final : PlaneSource {
   PlaneSource* base; PlaneSource* dark; PlaneSource* flat; PlaneSource* bias; float flatNorm;
-  std::vector<float> scB, scD, scF, scBi;  // reused per read; warping is sequential
   CalibratedSource(PlaneSource* b, PlaneSource* d, PlaneSource* f, PlaneSource* bi, float fn)
       : base(b),dark(d),flat(f),bias(bi),flatNorm(fn) {}
   int width() const override { return base ? base->width() : 0; }
@@ -61,7 +59,7 @@ struct CalibratedSource final : PlaneSource {
   Status readRegion(int x0,int y0,int w,int h,float*out) override {
     if (!base || !out || w<=0 || h<=0) return Status::InvalidArgument;
     const size_t n = static_cast<size_t>(w)*h;
-    auto& b = scB; auto& d = scD; auto& f = scF; auto& bi = scBi;
+    std::vector<float> b,d,f,bi;
     try {
       b.resize(n);
       if (dark) d.resize(n);
@@ -184,8 +182,6 @@ Status stackProject(const std::vector<std::string>&lightPaths,int W,int H,const 
   auto scores=scoreFrames(metrics);for(size_t i=0;i<scores.size();++i)frReport[i].score=scores[i];
   size_t ref=0;float bestRef=-1.f;for(size_t i=0;i<stars.size();++i)if(metrics[i].valid&&!stars[i].empty()&&scores[i]>bestRef){bestRef=scores[i];ref=i;}if(bestRef<0)return Status::NoStars;
   std::vector<FrameInput> inputs;inputs.reserve(bases.size());
-  // Registration is measured on the downsampled proxy, so residuals scale with the factor.
-  const double rmsLimit=1.75+0.25*(factor-1);
   RegParams rp;rp.maxStars=48;rp.minInliers=8;rp.tol=2.0;rp.scaleTol=0.02;rp.minSep=14.0;
   for(size_t i=0;i<bases.size();++i){FrameInput f;f.src=(dark||flat||bias)?static_cast<PlaneSource*>(calSources[i].get()):static_cast<PlaneSource*>(bases[i].get());f.include=false;f.t=Transform();f.gain=1.f;f.offset=0.f;f.weight=std::max(.05f,std::pow(std::max(0.f,scores[i])/100.f,1.7f));
     if(i==ref && metrics[i].valid&&!stars[i].empty()){f.include=true;frReport[i].included=true;frReport[i].reason="reference";f.weight=1.f;inputs.push_back(f);out.framesIncluded++;continue;}
@@ -195,7 +191,7 @@ Status stackProject(const std::vector<std::string>&lightPaths,int W,int H,const 
     RegResult rr;Status rsx=registerStars(rs,ts,rp,rr);
     if(rsx!=Status::Ok){frReport[i].reason="registration-failed";inputs.push_back(f);continue;}
     frReport[i].inliers=rr.inliers;frReport[i].rms=rr.rms;
-    if(rr.confidence<0.35 || rr.rms>rmsLimit){frReport[i].reason=rr.rms>rmsLimit?"registration-rms-too-high":"registration-confidence-low";inputs.push_back(f);continue;}
+    if(rr.confidence<0.35 || rr.rms>1.75){frReport[i].reason=rr.rms>1.75?"registration-rms-too-high":"registration-confidence-low";inputs.push_back(f);continue;}
     f.t=rr.t;Normalization n=estimatePhotometricNormalization(bgs[ref],bgs[i],rs,ts,rr.t);f.gain=n.gain;f.offset=n.offset;f.include=true;frReport[i].included=true;frReport[i].reason="ok";out.framesIncluded++;
     inputs.push_back(f);
   }
@@ -235,7 +231,7 @@ static float channelAt(const Plane&p,int cfa,int x,int y,int want){
   return clamp(.25f*(rawAt(p,x-1,y-1)+rawAt(p,x+1,y-1)+rawAt(p,x-1,y+1)+rawAt(p,x+1,y+1)));
 }
 static float stretchValue(float v,float lo,float hi,float amount){if(!(hi>lo))return 0.f;float x=std::max(0.f,std::min(1.f,(v-lo)/(hi-lo)));float a=std::max(.1f,amount);return std::asinh(a*x)/std::asinh(a);}
-Status renderPreview(const std::string&f32Path,int W,int H,int cfa,int mode,float stretch,float denoise,const Tone&tone,int maxDim,std::vector<uint8_t>&rgba,int&outW,int&outH){F32FileSource src(f32Path.c_str(),W,H);if(!src.ok())return Status::IoError;if(W<=0||H<=0)return Status::InvalidArgument;int factor=std::max(1,(std::max(W,H)+maxDim-1)/maxDim);if(factor>1&&factor&1)++factor;outW=(W+factor-1)/factor;outH=(H+factor-1)/factor;Plane p(outW,outH);std::vector<float>row(W*std::min(H,64));for(int oy=0;oy<outH;oy+=64){int hh=std::min(64,outH-oy);int sy=oy*factor;int rh=std::min(H-sy,std::max(1,hh*factor));row.resize((size_t)W*rh);Status s=src.readRegion(0,sy,W,rh,row.data());if(s!=Status::Ok)return s;for(int y=0;y<hh;++y){int rawY=std::min(H-1,(oy+y)*factor);for(int x=0;x<outW;++x){int rawX=std::min(W-1,x*factor);p.at(x,oy+y)=row[(size_t)(rawY-sy)*W+(rawX)];}}}
+Status renderPreview(const std::string&f32Path,int W,int H,int cfa,int mode,float stretch,float denoise,int maxDim,std::vector<uint8_t>&rgba,int&outW,int&outH){F32FileSource src(f32Path.c_str(),W,H);if(!src.ok())return Status::IoError;if(W<=0||H<=0)return Status::InvalidArgument;int factor=std::max(1,(std::max(W,H)+maxDim-1)/maxDim);if(factor>1&&factor&1)++factor;outW=(W+factor-1)/factor;outH=(H+factor-1)/factor;Plane p(outW,outH);std::vector<float>row(W*std::min(H,64));for(int oy=0;oy<outH;oy+=64){int hh=std::min(64,outH-oy);int sy=oy*factor;int rh=std::min(H-sy,std::max(1,hh*factor));row.resize((size_t)W*rh);Status s=src.readRegion(0,sy,W,rh,row.data());if(s!=Status::Ok)return s;for(int y=0;y<hh;++y){int rawY=std::min(H-1,(oy+y)*factor);for(int x=0;x<outW;++x){int rawX=std::min(W-1,x*factor);p.at(x,oy+y)=row[(size_t)(rawY-sy)*W+(rawX)];}}}
   std::vector<float> sample;sample.reserve(65536);for(int y=0;y<p.h;y+=std::max(1,p.h/256))for(int x=0;x<p.w;x+=std::max(1,p.w/256)){float v=p.at(x,y);if(std::isfinite(v))sample.push_back(v);if(sample.size()>=65536)break;}if(sample.empty())return Status::InvalidArgument;auto q=[&](double qv){std::vector<float>a=sample;size_t k=(size_t)std::min<double>(a.size()-1,qv*(a.size()-1));std::nth_element(a.begin(),a.begin()+k,a.end());return a[k];};float lo=q(.005),hi=q(.995);if(!(hi>lo))hi=lo+1e-3f;
   float gainR=1,gainG=1,gainB=1;if(mode!=0){double sr=0,sg=0,sb=0;int nr=0,ng=0,nb=0;for(int y=0;y<p.h;y+=3)for(int x=0;x<p.w;x+=3){float v=p.at(x,y);int c=cfaColor(cfa,x*factor,y*factor);if(v>.02f&&v<.8f){if(c==0){sr+=v;++nr;}else if(c==1){sg+=v;++ng;}else if(c==2){sb+=v;++nb;}}}double g=ng?sg/ng:1;if(nr)gainR=(float)std::max(.6,std::min(1.7,g/(sr/nr)));if(nb)gainB=(float)std::max(.6,std::min(1.7,g/(sb/nb)));}
   try{rgba.resize((size_t)outW*outH*4);}catch(...){return Status::OutOfMemory;}
@@ -264,11 +260,7 @@ Status renderPreview(const std::string&f32Path,int W,int H,int cfa,int mode,floa
       filtered.at(x,y)=centerV*(1.f-a)+smooth*a;
     }
     p=std::move(filtered);
-  }for(int y=0;y<outH;++y)for(int x=0;x<outW;++x){float r,g,b;int rawX=std::min(W-1,x*factor),rawY=std::min(H-1,y*factor);float center=p.at(x,y);if(mode==0){r=g=b=stretchValue(center,lo,hi,stretch);}else{r=channelAt(p,cfa,x,y,0)*gainR;g=channelAt(p,cfa,x,y,1)*gainG;b=channelAt(p,cfa,x,y,2)*gainB;r=stretchValue(r,lo,hi,stretch);g=stretchValue(g,lo,hi,stretch);b=stretchValue(b,lo,hi,stretch);if(mode==2){r=std::pow(std::max(0.f,std::min(1.f,r)),.92f);g=std::pow(std::max(0.f,std::min(1.f,g)),.92f);b=std::pow(std::max(0.f,std::min(1.f,b)),.92f);}}applyTone(r,g,b,tone);size_t i=((size_t)y*outW+x)*4;rgba[i]=(uint8_t)(std::max(0.f,std::min(1.f,r))*255);rgba[i+1]=(uint8_t)(std::max(0.f,std::min(1.f,g))*255);rgba[i+2]=(uint8_t)(std::max(0.f,std::min(1.f,b))*255);rgba[i+3]=255;(void)rawX;(void)rawY;}
+  }for(int y=0;y<outH;++y)for(int x=0;x<outW;++x){float r,g,b;int rawX=std::min(W-1,x*factor),rawY=std::min(H-1,y*factor);float center=p.at(x,y);if(mode==0){r=g=b=stretchValue(center,lo,hi,stretch);}else{r=channelAt(p,cfa,x,y,0)*gainR;g=channelAt(p,cfa,x,y,1)*gainG;b=channelAt(p,cfa,x,y,2)*gainB;r=stretchValue(r,lo,hi,stretch);g=stretchValue(g,lo,hi,stretch);b=stretchValue(b,lo,hi,stretch);if(mode==2){r=std::pow(std::max(0.f,std::min(1.f,r)),.92f);g=std::pow(std::max(0.f,std::min(1.f,g)),.92f);b=std::pow(std::max(0.f,std::min(1.f,b)),.92f);}}size_t i=((size_t)y*outW+x)*4;rgba[i]=(uint8_t)(std::max(0.f,std::min(1.f,r))*255);rgba[i+1]=(uint8_t)(std::max(0.f,std::min(1.f,g))*255);rgba[i+2]=(uint8_t)(std::max(0.f,std::min(1.f,b))*255);rgba[i+3]=255;(void)rawX;(void)rawY;}
   return Status::Ok;
-}
-
-Status renderPreview(const std::string&f32Path,int W,int H,int cfa,int mode,float stretch,float denoise,int maxDim,std::vector<uint8_t>&rgba,int&outW,int&outH){
-  return renderPreview(f32Path,W,H,cfa,mode,stretch,denoise,Tone(),maxDim,rgba,outW,outH);
 }
 }
