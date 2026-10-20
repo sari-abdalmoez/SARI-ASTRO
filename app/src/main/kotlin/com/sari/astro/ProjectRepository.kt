@@ -239,7 +239,8 @@ object ProjectRepository {
         val dynWhite = result.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)?.toFloat()
         val white = (dynWhite ?: staticWhite).coerceAtLeast(1f)
         val dynBlack = result.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
-        val black = if (dynBlack != null && dynBlack.isNotEmpty()) dynBlack.average().toFloat() else 0f
+        val dynBlackAverage = if (dynBlack != null && dynBlack.isNotEmpty()) dynBlack.average().toFloat() else null
+        val blackPattern = chars.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
         val rowFloats = FloatArray(image.width)
         val out = BufferedOutputStream(FileOutputStream(file), 64 * 1024)
         val bb = ByteBuffer.allocate(image.width * 4).order(ByteOrder.LITTLE_ENDIAN)
@@ -250,6 +251,9 @@ object ProjectRepository {
                     val pos = rowBase + x * pixelStride
                     if (pos + 1 >= buf.limit()) return false
                     val raw = buf.getShort(pos).toInt() and 0xffff
+                    val black = dynBlackAverage
+                        ?: blackPattern?.getOffsetForIndex(x % 2, y % 2)?.toFloat()
+                        ?: 0f
                     rowFloats[x] = ((raw - black) / (white - black).coerceAtLeast(1f)).coerceIn(0f, 1f)
                 }
                 bb.clear()

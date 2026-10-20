@@ -174,7 +174,7 @@ Status stackProject(const std::vector<std::string>&lightPaths,int W,int H,const 
     if(dark||flat||bias){calSources.push_back(std::make_unique<CalibratedSource>(use,dark.get(),flat.get(),bias.get(),flatNorm));use=calSources.back().get();}
     Plane proxy;
     Status s=readProxy(*use,factor,proxy);if(s!=Status::Ok)return s;
-    StarParams sp;sp.maxStars=160;sp.sigma=4.5f;sp.bgBlock=32;
+    StarParams sp;sp.maxStars=160;sp.sigma=4.5f;sp.bgBlock=32;sp.minFwhm=std::max(0.3f,1.2f/static_cast<float>(factor));
     metrics[i]=computeMetrics(proxy,sp);bgs[i]=estimateBackground(proxy);
     detectStars(proxy,sp,stars[i]);
     frReport[i].index=(int)i;frReport[i].stars=metrics[i].starCount;frReport[i].fwhm=metrics[i].fwhm;frReport[i].roundness=metrics[i].roundness;frReport[i].noise=metrics[i].noise;frReport[i].snr=metrics[i].snr;
