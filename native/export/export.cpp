@@ -48,6 +48,7 @@ static void writeChunk(std::ostream& o, const char type[4], const std::vector<ui
 }
 
 static int cfaColor(int cfa, int x, int y) {
+    if (cfa < 0) return 1; // mono frame (imported image): no CFA, single channel
     const int px = x & 1, py = y & 1;
     switch (cfa & 3) {
         case 0: return (py == 0 && px == 0) ? 0 : ((py == 1 && px == 1) ? 2 : 1); // RGGB
@@ -149,12 +150,13 @@ static void fitsComment(std::ostream&out,const std::string&text){
     std::string s="COMMENT ";s+=text;if(s.size()<80)s.append(80-s.size(),' ');else if(s.size()>80)s.resize(80);out.write(s.data(),80);
 }
 static void fitsPad(std::ostream&out,std::streamoff bytes,char fill){const std::streamoff rem=bytes%2880;if(rem){std::vector<char>z(static_cast<size_t>(2880-rem),fill);out.write(z.data(),z.size());}}
-static std::string cfaName(int cfa){switch(cfa&3){case 0:return "RGGB";case 1:return "GRBG";case 2:return "GBRG";case 3:return "BGGR";default:return "UNKNOWN";}}
+static std::string cfaName(int cfa){if(cfa<0)return "MONO";switch(cfa&3){case 0:return "RGGB";case 1:return "GRBG";case 2:return "GBRG";case 3:return "BGGR";default:return "UNKNOWN";}}
 static void beFloat(std::ostream&out,float v){uint32_t u=0;std::memcpy(&u,&v,4);const uint8_t b[4]={uint8_t(u>>24),uint8_t(u>>16),uint8_t(u>>8),uint8_t(u)};out.write(reinterpret_cast<const char*>(b),4);}
 
 } // namespace
 
 Status exportFullPng(const std::string&f32Path,int W,int H,int cfa,int mode,float stretch,float denoiseStrength,const Tone&tone,const std::string&outputPath){
+    if(cfa<0)mode=0; // mono frames cannot be demosaiced
     if(f32Path.empty()||outputPath.empty()||W<=0||H<=0) return Status::InvalidArgument;
     F32FileSource src(f32Path.c_str(),W,H);
     if(!src.ok()) return Status::IoError;

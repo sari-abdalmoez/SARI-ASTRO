@@ -9,6 +9,8 @@
     <uses-feature android:name="android.hardware.camera.raw" android:required="false" />
     <application
         android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="SARI ASTRO"
         android:supportsRtl="true"
         android:theme="@style/Theme.Sari">

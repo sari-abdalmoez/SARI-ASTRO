@@ -40,4 +40,13 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // Google Analytics for Firebase
+    implementation(platform("com.google.firebase:firebase-bom:33.1.0"))
+    implementation("com.google.firebase:firebase-analytics")
+}
+
+// The Google Services plugin needs app/google-services.json from your Firebase project.
+// Applied only when that file exists, so the project still builds without it (analytics stays off).
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
 }

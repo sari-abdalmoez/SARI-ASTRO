@@ -38,6 +38,7 @@ class GalleryActivity : AppCompatActivity() {
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
         MobileAds.initialize(this) { }
+        Analytics.screen(this, "Gallery")
         buildUi()
         loadProjects()
     }
@@ -78,6 +79,10 @@ class GalleryActivity : AppCompatActivity() {
         val nav = LinearLayout(this).apply { gravity = Gravity.CENTER }
         nav.addView(button("CAMERA").apply { setOnClickListener { finish() } }, LinearLayout.LayoutParams(0, dp(44), 1f))
         nav.addView(button("SETTINGS").apply { setOnClickListener { startActivity(android.content.Intent(this@GalleryActivity, SettingsActivity::class.java)) } }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { leftMargin = dp(6) })
+        nav.addView(button("UPGRADE").apply {
+            setTextColor(Color.rgb(255, 140, 26)); setTypeface(typeface, 1)
+            setOnClickListener { UpgradeDialog.show(this@GalleryActivity) }
+        }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { leftMargin = dp(6) })
         root.addView(nav, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
 
         empty = TextView(this).apply {
@@ -207,6 +212,7 @@ class GalleryActivity : AppCompatActivity() {
     }
 
     private fun startImport() {
+        Analytics.event(this, "import_started")
         importLauncher.launch(arrayOf("image/*", "image/x-adobe-dng"))
     }
 
@@ -235,7 +241,7 @@ class GalleryActivity : AppCompatActivity() {
             val r = ProjectRepository.importUris(this, dir, uris)
             runOnUiThread {
                 loadProjects()
-                val msg = "Imported ${r.imported} • skipped ${r.skipped}" + if (r.errors.isEmpty()) "" else " • ${r.errors.size} failed"
+                val msg = "Imported ${r.imported} • skipped ${r.skipped}" + if (r.errors.isEmpty()) "" else " • ${r.errors.size} failed\n${r.errors.first()}"
                 Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
             }
         }

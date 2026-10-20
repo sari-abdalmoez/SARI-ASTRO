@@ -319,37 +319,56 @@ object ProjectRepository {
         var skipped = 0
         val errors = mutableListOf<String>()
         val originals = File(sessionDir, "originals").apply { mkdirs() }
-        val imports = File(sessionDir, "imports").apply { mkdirs() }
         val frames = File(sessionDir, "frames").apply { mkdirs() }
-        val session = readSession(sessionDir)
         for ((index, uri) in uris.withIndex()) {
+            val name = displayName(ctx, uri) ?: "import_${System.currentTimeMillis()}_$index"
             try {
-                val name = displayName(ctx, uri) ?: "import_${System.currentTimeMillis()}_$index"
                 val lower = name.lowercase(Locale.US)
-                if (lower.endsWith(".dng") || ctx.contentResolver.getType(uri)?.contains("dng", true) == true) {
+                val mime = ctx.contentResolver.getType(uri)
+                if (lower.endsWith(".dng") || mime?.contains("dng", true) == true) {
                     val safe = safeName(name.substringBeforeLast('.'))
                     val original = uniqueFile(originals, safe + ".dng")
-                    require(copyUri(ctx, uri, original)) { "Unable to copy DNG" }
+                    require(copyUri(ctx, uri, original)) { "Unable to read the file" }
                     val f32 = uniqueFile(frames, safe + ".f32")
                     val props = File(frames, f32.nameWithoutExtension + ".properties")
                     val dng = runCatching { DngImporter.importDng(original, f32, props) }.getOrElse {
                         f32.delete(); props.delete(); throw it
                     }
-                    if (session.width <= 0 || session.height <= 0) writeSessionMetadata(session.copy(width = dng.width, height = dng.height, cfa = dng.cfa))
+                    val current = readSession(sessionDir)
+                    if (current.width <= 0 || current.height <= 0) writeSessionMetadata(current.copy(width = dng.width, height = dng.height, cfa = dng.cfa))
                     imported++
-                } else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") || lower.endsWith(".webp") || ctx.contentResolver.getType(uri)?.startsWith("image/") == true) {
-                    val ext = lower.substringAfterLast('.', "jpg").take(5)
-                    require(copyUri(ctx, uri, uniqueFile(imports, safeName(name.removeSuffix(".$ext")) + ".$ext"))) { "Unable to copy image" }
+                } else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") || lower.endsWith(".webp") ||
+                    mime?.startsWith("image/") == true) {
+                    // Keep the untouched original, identify the real format from its bytes, then convert a copy.
+                    val safe = safeName(name.substringBeforeLast('.'))
+                    val tmp = uniqueFile(originals, "$safe.tmp")
+                    require(copyUri(ctx, uri, tmp)) { "Unable to read the file" }
+                    val format = ImageFrameImporter.sniffFormat(tmp)
+                    if (format == null) {
+                        tmp.delete()
+                        throw IllegalArgumentException("unsupported format (use JPEG, PNG or WebP)")
+                    }
+                    val original = uniqueFile(originals, "$safe.${if (format == "jpeg") "jpg" else format}")
+                    tmp.renameTo(original)
+                    val f32 = uniqueFile(frames, safe + ".f32")
+                    val props = File(frames, f32.nameWithoutExtension + ".properties")
+                    val res = try {
+                        ImageFrameImporter.importToMono(original, f32, props, name, format)
+                    } catch (t: Throwable) {
+                        f32.delete(); props.delete(); throw t
+                    }
+                    val current = readSession(sessionDir)
+                    if (current.width <= 0 || current.height <= 0) writeSessionMetadata(current.copy(width = res.width, height = res.height, cfa = res.cfa))
                     imported++
                 } else {
                     skipped++
                 }
             } catch (t: Throwable) {
-                errors += (t.message ?: "Import failed")
+                errors += if (t is ImageFrameImporter.ImportException) (t.message ?: "import failed") else "$name: ${t.message ?: "import failed"}"
             }
         }
         // Touch the project so it naturally bubbles to the top of the album grid.
-        session.dir.setLastModified(System.currentTimeMillis())
+        sessionDir.setLastModified(System.currentTimeMillis())
         return ImportSummary(imported, skipped, errors)
     }
 

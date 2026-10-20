@@ -65,3 +65,12 @@
   set in `GalleryActivity`. Use test ad units while developing to avoid invalid-traffic issues.
 - **Name**: "SARI ASTRO" in the launcher label, gallery header, settings and camera brand.
 - Protected code (stacking engine, JNI/C++, gallery storage and database, save/load logic) was not modified.
+
+## Imported image stacking, launcher icon, premium panel, analytics
+
+- Imported JPEG/PNG/WebP images are now converted into mono linear-light frames (CFA = -1, never Bayer) and can be stacked. Mixing them with camera RAW frames is blocked with a clear message.
+- Imports detect the real format from file bytes, preserve the original in `originals/`, honour EXIF orientation, and decode in strips so full-resolution bitmaps are never held in RAM.
+- Native preview/export force Mono for mono frames.
+- Launcher icon: `mipmap-*` legacy icons plus adaptive icon (`mipmap-anydpi-v26`) built from the supplied artwork; manifest now sets `android:icon` and `android:roundIcon`.
+- Gallery: UPGRADE panel (presentation only; no purchase backend exists yet).
+- Google Analytics for Firebase added. Requires `app/google-services.json`; without it the plugin is skipped and analytics stays off.

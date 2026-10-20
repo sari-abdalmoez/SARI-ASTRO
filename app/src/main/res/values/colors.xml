@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Sampled from the corners of the supplied launcher artwork so the adaptive background blends seamlessly. -->
+    <color name="ic_launcher_background">#020612</color>
+</resources>

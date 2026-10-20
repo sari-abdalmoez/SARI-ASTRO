@@ -88,6 +88,8 @@ class EditorActivity : Activity() {
         w = intent.getIntExtra("w", 0)
         h = intent.getIntExtra("h", 0)
         cfa = intent.getIntExtra("cfa", 0)
+        // Mono stacks (from imported JPEG/PNG/WebP) have no colour filter array: only Mono applies.
+        if (cfa < 0) mode = 0
         for (id in modeIds) looks[id] = defaultLook(id)
         kit = SariKit(this)
         buildUi()
@@ -212,6 +214,8 @@ class EditorActivity : Activity() {
     }
 
     private fun refreshModeSelector() {
+        if (cfa < 0) { modeHolder.visibility = android.view.View.GONE; return }
+        modeHolder.visibility = android.view.View.VISIBLE
         modeHolder.removeAllViews()
         modeHolder.addView(
             kit.segmented(modeLabels, modeIds.indexOf(mode)) { index -> selectMode(modeIds[index]) },

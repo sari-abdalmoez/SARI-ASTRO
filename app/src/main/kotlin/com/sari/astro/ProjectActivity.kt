@@ -108,7 +108,7 @@ class ProjectActivity : AppCompatActivity() {
     }
 
     private fun metaText(f: ProjectRepository.FrameInfo):String=when(f.type){
-        ProjectRepository.FrameType.LIGHT -> "ISO ${f.iso} • ${exp(f.exposureNs)}" + (f.temperatureC?.let{" • %.1f°C".format(Locale.US,it)}?:"")
+        ProjectRepository.FrameType.LIGHT -> if(f.cfa<0) "Imported • ${f.width}×${f.height}" else "ISO ${f.iso} • ${exp(f.exposureNs)}" + (f.temperatureC?.let{" • %.1f°C".format(Locale.US,it)}?:"")
         ProjectRepository.FrameType.IMPORTED -> "Imported • ${f.width}×${f.height}"
         else -> f.type.name
     }
@@ -140,8 +140,9 @@ class ProjectActivity : AppCompatActivity() {
     private fun startStack(){
         val selected=frames.filter{it.stackable&&checked.contains(it.path)}
         if(selected.size<2)return
+        Analytics.event(this,"stack_started",mapOf("frames" to selected.size.toString(),"mono" to (if(selected.first().cfa<0)"1" else "0")))
         val first=selected.first()
-        if(selected.any{it.width!=first.width||it.height!=first.height||it.cfa!=first.cfa}){Toast.makeText(this,"RAW frames must have matching dimensions and CFA",Toast.LENGTH_LONG).show();return}
+        if(selected.any{it.width!=first.width||it.height!=first.height||it.cfa!=first.cfa}){Toast.makeText(this,"Selected frames must share one size and type. Camera RAW and imported images cannot be stacked together.",Toast.LENGTH_LONG).show();return}
         val dir=projectDir ?: return
         val dark=ProjectRepository.latestCalibrationInProject(dir,ProjectRepository.FrameType.DARK)?.path ?: ""
         val flat=ProjectRepository.latestCalibrationInProject(dir,ProjectRepository.FrameType.FLAT)?.path ?: ""
@@ -166,5 +167,5 @@ class ProjectActivity : AppCompatActivity() {
     }
 
     private fun startImport(){importLauncher.launch(arrayOf("image/*","image/x-adobe-dng","image/tiff"))}
-    private fun importIntoCurrent(uris:List<android.net.Uri>){val dir=projectDir?:return;Toast.makeText(this,"Importing…",Toast.LENGTH_SHORT).show();work.execute{val r=ProjectRepository.importUris(this,dir,uris);runOnUiThread{load();Toast.makeText(this,"Imported ${r.imported} • failed ${r.errors.size}",Toast.LENGTH_LONG).show()}}}
+    private fun importIntoCurrent(uris:List<android.net.Uri>){val dir=projectDir?:return;Toast.makeText(this,"Importing…",Toast.LENGTH_SHORT).show();work.execute{val r=ProjectRepository.importUris(this,dir,uris);runOnUiThread{load();Toast.makeText(this,"Imported ${r.imported} • failed ${r.errors.size}" + (r.errors.firstOrNull()?.let{"\n$it"}?:""),Toast.LENGTH_LONG).show()}}}
 }
