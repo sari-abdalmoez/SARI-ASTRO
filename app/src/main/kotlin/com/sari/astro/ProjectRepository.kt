@@ -238,9 +238,20 @@ object ProjectRepository {
         val staticWhite = chars.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)?.toFloat() ?: 65535f
         val dynWhite = result.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)?.toFloat()
         val white = (dynWhite ?: staticWhite).coerceAtLeast(1f)
+        // Black level per 2x2 raw-layout position (row-major: TL, TR, BL, BR). Preference: dynamic
+        // (per-frame) metadata, then the static pattern. The old code averaged the dynamic values
+        // and fell back to 0 when they were absent, leaving a pedestal and per-channel offsets.
         val dynBlack = result.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
-        val dynBlackAverage = if (dynBlack != null && dynBlack.isNotEmpty()) dynBlack.average().toFloat() else null
-        val blackPattern = chars.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
+        val staticPattern = chars.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
+        val blackPos = FloatArray(4) { i ->
+            when {
+                dynBlack != null && dynBlack.size >= 4 -> dynBlack[i]
+                staticPattern != null -> staticPattern.getOffsetForIndex(i and 1, i shr 1).toFloat()
+                dynBlack != null && dynBlack.isNotEmpty() -> dynBlack.average().toFloat()
+                else -> 0f
+            }
+        }
+        val denom = (white - blackPos.average().toFloat()).coerceAtLeast(1f)
         val rowFloats = FloatArray(image.width)
         val out = BufferedOutputStream(FileOutputStream(file), 64 * 1024)
         val bb = ByteBuffer.allocate(image.width * 4).order(ByteOrder.LITTLE_ENDIAN)
@@ -251,10 +262,12 @@ object ProjectRepository {
                     val pos = rowBase + x * pixelStride
                     if (pos + 1 >= buf.limit()) return false
                     val raw = buf.getShort(pos).toInt() and 0xffff
-                    val black = dynBlackAverage
-                        ?: blackPattern?.getOffsetForIndex(x % 2, y % 2)?.toFloat()
-                        ?: 0f
-                    rowFloats[x] = ((raw - black) / (white - black).coerceAtLeast(1f)).coerceIn(0f, 1f)
+                    // Only the upper end is limited (sensor saturation). Negative values are real
+                    // noise around the black level and must be kept: clipping them at 0 made most
+                    // of the sky exactly 0 (noise estimate 0 -> "No usable stars", native status 2)
+                    // and biased every stacked average upward.
+                    val b = blackPos[(x and 1) + ((y and 1) shl 1)]
+                    rowFloats[x] = minOf(1f, (raw - b) / denom)
                 }
                 bb.clear()
                 for (v in rowFloats) bb.putFloat(v)

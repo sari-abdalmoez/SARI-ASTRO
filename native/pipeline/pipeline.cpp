@@ -4,6 +4,7 @@
 #include "../registration/registration.h"
 #include "../stacking/stacking.h"
 #include "../stars/stars.h"
+#include "../core/cfa.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -76,7 +77,54 @@ struct CalibratedSource final : PlaneSource {
       if (bias) v -= bi[i];
       if (dark) v -= d[i];
       if (flat) { float fv=f[i]; if(bias) fv-=bi[i]; fv/=std::max(flatNorm,eps); if(finitePositive(fv)) v/=fv; else v=0.f; }
-      out[i]=std::max(0.f,std::isfinite(v)?v:0.f);
+      out[i]=std::isfinite(v)?v:0.f; // signed: clipping at zero would bias faint-signal statistics
+    }
+    return Status::Ok;
+  }
+};
+
+
+// Raw per-pixel noise (sigma) of a mosaic frame, from differences of same-channel neighbours (x, x+2).
+// Differences cancel the smooth sky background; the median-based estimate ignores sparse stars.
+static float estimateRawNoise(PlaneSource& src){
+  const int W=src.width(),H=src.height(); if(W<8||H<8)return 0.f;
+  const int sw=std::min(W,1024),rows=4; std::vector<float> buf((size_t)sw*rows),d; d.reserve(8*rows*sw);
+  for(int k=0;k<8;++k){int y0=std::min(H-rows,(int)((long long)(H-rows)*(2*k+1)/16)),x0=std::max(0,(W-sw)/2);
+    if(src.readRegion(x0,y0,sw,rows,buf.data())!=Status::Ok)continue;
+    for(int r=0;r<rows;++r)for(int i=0;i+2<sw;++i){float a=buf[(size_t)r*sw+i],b=buf[(size_t)r*sw+i+2];if(std::isfinite(a)&&std::isfinite(b))d.push_back(std::fabs(a-b));}}
+  if(d.size()<64)return 0.f; size_t m=d.size()/2;std::nth_element(d.begin(),d.begin()+m,d.end());return 1.4826f*d[m]/1.41421356f;
+}
+
+// Hot / warm pixel suppression in the spirit of Pixel Night Sight (Google Research, 2019): a pixel is an
+// outlier when it exceeds the median of its same-colour neighbours by many sigma. Unlike a plain outlier
+// filter this one keeps real star cores: a star also lights its direct neighbours, a hot pixel does not.
+// Defective pixels are replaced by the neighbour median; everything else is passed through untouched.
+struct HotPixelSource final : PlaneSource {
+  PlaneSource* base; float sigma; float k;
+  HotPixelSource(PlaneSource* b,float s,float kk=6.f):base(b),sigma(s),k(kk){}
+  int width()const override{return base?base->width():0;}
+  int height()const override{return base?base->height():0;}
+  Status readRegion(int x0,int y0,int w,int h,float*out)override{
+    if(!base||!out||w<=0||h<=0)return Status::InvalidArgument;
+    const int W=width(),H=height(),m=2;
+    const int rx0=std::max(0,x0-m),ry0=std::max(0,y0-m),rx1=std::min(W,x0+w+m),ry1=std::min(H,y0+h+m);
+    const int rw=rx1-rx0,rh=ry1-ry0; std::vector<float> b;
+    try{b.resize((size_t)rw*rh);}catch(...){return Status::OutOfMemory;}
+    Status st=base->readRegion(rx0,ry0,rw,rh,b.data());if(st!=Status::Ok)return st;
+    auto at=[&](int x,int y,float&v){if(x<0||y<0||x>=W||y>=H)return false;v=b[(size_t)(y-ry0)*rw+(x-rx0)];return std::isfinite(v);};
+    const float thr=k*sigma;
+    for(int y=0;y<h;++y)for(int x=0;x<w;++x){
+      const int X=x0+x,Y=y0+y;float v=0;out[(size_t)y*w+x]=at(X,Y,v)?v:b[(size_t)(Y-ry0)*rw+(X-rx0)];
+      if(!(sigma>0)||!std::isfinite(v))continue;
+      float nb[8];int n=0;static const int ox[8]={-2,2,0,0,-2,2,-2,2},oy[8]={0,0,-2,2,-2,-2,2,2};
+      for(int i=0;i<8;++i){float t;if(at(X+ox[i],Y+oy[i],t))nb[n++]=t;}
+      if(n<5)continue;
+      std::nth_element(nb,nb+n/2,nb+n);float med=nb[n/2];
+      const float ex=v-med;if(ex<=thr)continue;
+      float dmax=-1e30f;static const int dx4[4]={-1,1,0,0},dy4[4]={0,0,-1,1};
+      for(int i=0;i<4;++i){float t;if(at(X+dx4[i],Y+dy4[i],t))dmax=std::max(dmax,t-med);}
+      if(dmax>0.25f*ex+3.f*sigma)continue; // neighbours are lit too: a real star, keep it
+      out[(size_t)y*w+x]=med;
     }
     return Status::Ok;
   }
@@ -153,7 +201,7 @@ static Normalization estimatePhotometricNormalization(const BgStats& refBg,const
 
 } // namespace anonymous
 
-Status stackProject(const std::vector<std::string>&lightPaths,int W,int H,const std::string&darkPath,const std::string&flatPath,const std::string&biasPath,const std::string&outputPath,const std::string&progressPath,const std::string&reportPath,int tile,int workers,int startTile,const std::function<bool(int,int)>& cancelOrContinue,PipelineReport&out){
+Status stackProject(const std::vector<std::string>&lightPaths,int W,int H,const std::string&darkPath,const std::string&flatPath,const std::string&biasPath,const std::string&outputPath,const std::string&progressPath,const std::string&reportPath,int tile,int workers,int startTile,const std::function<bool(int,int)>& cancelOrContinue,PipelineReport&out,int cfa){
   out=PipelineReport();out.framesInput=(int)lightPaths.size();if(lightPaths.empty()||W<=0||H<=0||outputPath.empty()||tile<16||workers<1||startTile<0)return Status::InvalidArgument;
   std::vector<std::unique_ptr<F32FileSource>> bases; bases.reserve(lightPaths.size());
   for(auto&p:lightPaths){auto s=std::make_unique<F32FileSource>(p.c_str(),W,H);if(!s->ok())return Status::IoError;bases.push_back(std::move(s));}
@@ -163,27 +211,34 @@ Status stackProject(const std::vector<std::string>&lightPaths,int W,int H,const 
   auto bias=openCal(biasPath); if(!biasPath.empty()&&!bias)return Status::IoError;
   float flatNorm=1.f;if(flat){flatNorm=medianSample(*flat);if(!(flatNorm>1e-6f))flatNorm=1.f;}
 
-  const int factor = (std::max(W,H)>5000)?4:((std::max(W,H)>2500)?2:1);
+  // Even factors average complete Bayer quads, so no CFA pattern reaches the detector.
+  // (The old rule used factor 1 up to 2500 px, which fed the raw mosaic to the detector.)
+  const int factor = (std::max(W,H)>5000)?4:((std::max(W,H)>=1000)?2:1);
   std::vector<FrameMetrics> metrics(lightPaths.size());
   std::vector<BgStats> bgs(lightPaths.size());
   std::vector<std::vector<Star>> stars(lightPaths.size());
   std::vector<PipelineFrameReport> frReport(lightPaths.size());
   std::vector<std::unique_ptr<CalibratedSource>> calSources;calSources.reserve(lightPaths.size());
+  std::vector<std::unique_ptr<HotPixelSource>> hotSources;hotSources.reserve(lightPaths.size());
+  std::vector<PlaneSource*> finalSrc(lightPaths.size(),nullptr);
   for(size_t i=0;i<bases.size();++i){
     PlaneSource* use=bases[i].get();
     if(dark||flat||bias){calSources.push_back(std::make_unique<CalibratedSource>(use,dark.get(),flat.get(),bias.get(),flatNorm));use=calSources.back().get();}
+    if(cfa>=0){const float rn=estimateRawNoise(*use);if(rn>0){hotSources.push_back(std::make_unique<HotPixelSource>(use,rn));use=hotSources.back().get();}}
+    finalSrc[i]=use;
     Plane proxy;
     Status s=readProxy(*use,factor,proxy);if(s!=Status::Ok)return s;
-    StarParams sp;sp.maxStars=160;sp.sigma=4.5f;sp.bgBlock=32;sp.minFwhm=std::max(0.3f,1.2f/static_cast<float>(factor));
+    StarParams sp;sp.maxStars=160;sp.sigma=4.5f;sp.bgBlock=32;
     metrics[i]=computeMetrics(proxy,sp);bgs[i]=estimateBackground(proxy);
     detectStars(proxy,sp,stars[i]);
     frReport[i].index=(int)i;frReport[i].stars=metrics[i].starCount;frReport[i].fwhm=metrics[i].fwhm;frReport[i].roundness=metrics[i].roundness;frReport[i].noise=metrics[i].noise;frReport[i].snr=metrics[i].snr;
   }
   auto scores=scoreFrames(metrics);for(size_t i=0;i<scores.size();++i)frReport[i].score=scores[i];
-  size_t ref=0;float bestRef=-1.f;for(size_t i=0;i<stars.size();++i)if(metrics[i].valid&&!stars[i].empty()&&scores[i]>bestRef){bestRef=scores[i];ref=i;}if(bestRef<0)return Status::NoStars;
+  size_t ref=0;float bestRef=-1.f;for(size_t i=0;i<stars.size();++i)if(metrics[i].valid&&!stars[i].empty()&&scores[i]>bestRef){bestRef=scores[i];ref=i;}
+  if(bestRef<0){for(auto&fr:frReport)if(fr.reason.empty())fr.reason=(fr.stars==0)?"no-stars-detected":"low-quality";out.status=(int)Status::NoStars;out.frames=frReport;writeReport(reportPath,out);return Status::NoStars;}
   std::vector<FrameInput> inputs;inputs.reserve(bases.size());
   RegParams rp;rp.maxStars=48;rp.minInliers=8;rp.tol=2.0;rp.scaleTol=0.02;rp.minSep=14.0;
-  for(size_t i=0;i<bases.size();++i){FrameInput f;f.src=(dark||flat||bias)?static_cast<PlaneSource*>(calSources[i].get()):static_cast<PlaneSource*>(bases[i].get());f.include=false;f.t=Transform();f.gain=1.f;f.offset=0.f;f.weight=std::max(.05f,std::pow(std::max(0.f,scores[i])/100.f,1.7f));
+  for(size_t i=0;i<bases.size();++i){FrameInput f;f.src=finalSrc[i];f.include=false;f.t=Transform();f.gain=1.f;f.offset=0.f;f.weight=std::max(.05f,std::pow(std::max(0.f,scores[i])/100.f,1.7f));
     if(i==ref && metrics[i].valid&&!stars[i].empty()){f.include=true;frReport[i].included=true;frReport[i].reason="reference";f.weight=1.f;inputs.push_back(f);out.framesIncluded++;continue;}
     if(stars[i].size()<3){frReport[i].reason="not-enough-stars";inputs.push_back(f);continue;}
     if(!metrics[i].valid||scores[i]<25.f){frReport[i].reason="low-quality";inputs.push_back(f);continue;}
@@ -195,72 +250,79 @@ Status stackProject(const std::vector<std::string>&lightPaths,int W,int H,const 
     f.t=rr.t;Normalization n=estimatePhotometricNormalization(bgs[ref],bgs[i],rs,ts,rr.t);f.gain=n.gain;f.offset=n.offset;f.include=true;frReport[i].included=true;frReport[i].reason="ok";out.framesIncluded++;
     inputs.push_back(f);
   }
-  if(out.framesIncluded==0)return Status::RegistrationFailed;
+  if(out.framesIncluded==0){out.status=(int)Status::RegistrationFailed;out.frames=frReport;writeReport(reportPath,out);return Status::RegistrationFailed;}
   if(startTile==0){std::ofstream clear(progressPath,std::ios::trunc);}
   F32OutputSink sink(outputPath,W,H,startTile);if(!sink.ok())return Status::IoError;
-  StackParams sp;sp.tile=tile;sp.workers=workers;sp.startTile=startTile;sp.rej=Rejection::Winsorized;sp.kLow=3;sp.kHigh=3;sp.maxIter=5;
+  StackParams sp;sp.tile=tile;sp.workers=workers;sp.startTile=startTile;sp.rej=Rejection::Winsorized;sp.kLow=3;sp.kHigh=3;sp.maxIter=5;sp.cfa=cfa;
   ProgressTracker tracker(1); const int tx=(W+tile-1)/tile,ty=(H+tile-1)/tile,total=tx*ty;tracker=ProgressTracker(total);tracker.start(0);auto start=Clock::now();
   auto cb=[&](int done,int totalTiles){double elapsed=std::chrono::duration<double>(Clock::now()-start).count();tracker.update(done,elapsed);writeProgress(progressPath,done,totalTiles,elapsed);out.tilesDone=done;out.tilesTotal=totalTiles;return cancelOrContinue?cancelOrContinue(done,totalTiles):true;};
   StackStats st;Status s=stackFrames(inputs,W,H,sp,sink,cb,st);out.status=(int)s;out.tilesDone=st.tilesDone;out.tilesTotal=st.tilesTotal;out.frames=frReport;writeReport(reportPath,out);writeProgress(progressPath,st.tilesDone,st.tilesTotal,std::chrono::duration<double>(Clock::now()-start).count());return s;
 }
 
-static float rawAt(const Plane&p,int x,int y){x=std::max(0,std::min(p.w-1,x));y=std::max(0,std::min(p.h-1,y));return p.at(x,y);}
-static int cfaColor(int cfa,int x,int y){if(cfa<0)return 1;int px=x&1,py=y&1;switch(cfa&3){case 0: return (py==0&&px==0)?0:((py==1&&px==1)?2:1); // RGGB
-case 1: return (py==0&&px==1)?0:((py==1&&px==0)?2:1); // GRBG
-case 2: return (py==0&&px==0)?1:((py==1&&px==1)?1:((py==0)?2:0)); // GBRG
-case 3: return (py==0&&px==0)?2:((py==1&&px==1)?0:1); // BGGR
-default:return 1;}}
-static float channelAt(const Plane&p,int cfa,int x,int y,int want){
-  const int here=cfaColor(cfa,x,y); const float c=rawAt(p,x,y);
-  if(here==want)return c;
-  auto clamp=[](float v){return std::max(0.f,std::min(1.f,v));};
-  if(want==1 && here!=1){
-    const float l=rawAt(p,x-1,y),r=rawAt(p,x+1,y),u=rawAt(p,x,y-1),d=rawAt(p,x,y+1);
-    const float l2=rawAt(p,x-2,y),r2=rawAt(p,x+2,y),u2=rawAt(p,x,y-2),d2=rawAt(p,x,y+2);
-    const float gh=.5f*(l+r)+.25f*(2.f*c-l2-r2);
-    const float gv=.5f*(u+d)+.25f*(2.f*c-u2-d2);
-    const float gradH=std::fabs(l-r)+.5f*std::fabs(l2-r2);
-    const float gradV=std::fabs(u-d)+.5f*std::fabs(u2-d2);
-    return clamp(gradH<=gradV?gh:gv);
-  }
-  if(here==1){
-    bool horizontal=cfaColor(cfa,x-1,y)==want || cfaColor(cfa,x+1,y)==want;
-    const float a=horizontal?0.5f*(rawAt(p,x-1,y)+rawAt(p,x+1,y)):0.5f*(rawAt(p,x,y-1)+rawAt(p,x,y+1));
-    return clamp(a);
-  }
-  return clamp(.25f*(rawAt(p,x-1,y-1)+rawAt(p,x+1,y-1)+rawAt(p,x-1,y+1)+rawAt(p,x+1,y+1)));
-}
+// Preview renderer. Large frames are reduced by averaging complete factor x factor blocks per CFA
+// channel (factor is even for Bayer data), which gives true RGB with 2x..4x lower noise. The old
+// code point-sampled one raw pixel per block (always the same CFA position) and then treated the
+// decimated plane as a mosaic, which produced aliased, colour-corrupted previews.
 static float stretchValue(float v,float lo,float hi,float amount){if(!(hi>lo))return 0.f;float x=std::max(0.f,std::min(1.f,(v-lo)/(hi-lo)));float a=std::max(.1f,amount);return std::asinh(a*x)/std::asinh(a);}
-Status renderPreview(const std::string&f32Path,int W,int H,int cfa,int mode,float stretch,float denoise,const Tone&tone,int maxDim,std::vector<uint8_t>&rgba,int&outW,int&outH){if(cfa<0)mode=0;F32FileSource src(f32Path.c_str(),W,H);if(!src.ok())return Status::IoError;if(W<=0||H<=0)return Status::InvalidArgument;int factor=std::max(1,(std::max(W,H)+maxDim-1)/maxDim);if(factor>1&&factor&1)++factor;outW=(W+factor-1)/factor;outH=(H+factor-1)/factor;Plane p(outW,outH);std::vector<float>row(W*std::min(H,64));for(int oy=0;oy<outH;oy+=64){int hh=std::min(64,outH-oy);int sy=oy*factor;int rh=std::min(H-sy,std::max(1,hh*factor));row.resize((size_t)W*rh);Status s=src.readRegion(0,sy,W,rh,row.data());if(s!=Status::Ok)return s;for(int y=0;y<hh;++y){int rawY=std::min(H-1,(oy+y)*factor);for(int x=0;x<outW;++x){int rawX=std::min(W-1,x*factor);p.at(x,oy+y)=row[(size_t)(rawY-sy)*W+(rawX)];}}}
-  std::vector<float> sample;sample.reserve(65536);for(int y=0;y<p.h;y+=std::max(1,p.h/256))for(int x=0;x<p.w;x+=std::max(1,p.w/256)){float v=p.at(x,y);if(std::isfinite(v))sample.push_back(v);if(sample.size()>=65536)break;}if(sample.empty())return Status::InvalidArgument;auto q=[&](double qv){std::vector<float>a=sample;size_t k=(size_t)std::min<double>(a.size()-1,qv*(a.size()-1));std::nth_element(a.begin(),a.begin()+k,a.end());return a[k];};float lo=q(.005),hi=q(.995);if(!(hi>lo))hi=lo+1e-3f;
-  float gainR=1,gainG=1,gainB=1;if(mode!=0){double sr=0,sg=0,sb=0;int nr=0,ng=0,nb=0;for(int y=0;y<p.h;y+=3)for(int x=0;x<p.w;x+=3){float v=p.at(x,y);int c=cfaColor(cfa,x*factor,y*factor);if(v>.02f&&v<.8f){if(c==0){sr+=v;++nr;}else if(c==1){sg+=v;++ng;}else if(c==2){sb+=v;++nb;}}}double g=ng?sg/ng:1;if(nr)gainR=(float)std::max(.6,std::min(1.7,g/(sr/nr)));if(nb)gainB=(float)std::max(.6,std::min(1.7,g/(sb/nb)));}
-  try{rgba.resize((size_t)outW*outH*4);}catch(...){return Status::OutOfMemory;}
-  if(denoise>0.001f){
-    Plane filtered(outW,outH);
-    const float amount=std::min(1.f,std::max(0.f,denoise));
-    for(int y=0;y<outH;++y)for(int x=0;x<outW;++x){
-      const int rx=x*factor, ry=y*factor;
-      const int wanted=cfaColor(cfa,rx,ry);
-      float centerV=p.at(x,y), sum=centerV, ws=1.f;
-      for(int dy=-2;dy<=2;++dy)for(int dx=-2;dx<=2;++dx){
-        if(dx==0&&dy==0)continue;
-        int nx=x+dx, ny=y+dy;
-        if(nx<0||ny<0||nx>=outW||ny>=outH)continue;
-        if(cfaColor(cfa,nx*factor,ny*factor)!=wanted)continue;
-        float v=p.at(nx,ny);
-        float d=std::fabs(v-centerV);
-        float spatial=std::exp(-0.35f*float(dx*dx+dy*dy));
-        float range=std::exp(-d*d/(0.0004f+0.03f*amount));
-        float ww=spatial*range;
-        sum+=v*ww; ws+=ww;
-      }
-      float smooth=sum/ws;
-      float edge=std::min(1.f,std::fabs(centerV-smooth)*20.f);
-      float a=amount*0.55f*(1.f-edge);
-      filtered.at(x,y)=centerV*(1.f-a)+smooth*a;
+Status renderPreview(const std::string&f32Path,int W,int H,int cfa,int mode,float stretch,float denoise,const Tone&tone,int maxDim,std::vector<uint8_t>&rgba,int&outW,int&outH){
+  if(cfa<0)mode=0;
+  if(W<=0||H<=0||maxDim<=0)return Status::InvalidArgument;
+  F32FileSource src(f32Path.c_str(),W,H);if(!src.ok())return Status::IoError;
+  int factor=std::max(1,(std::max(W,H)+maxDim-1)/maxDim);
+  if(cfa>=0){ if(factor<2)factor=2; if(factor&1)++factor; } // whole Bayer quads
+  outW=(W+factor-1)/factor;outH=(H+factor-1)/factor;
+  std::vector<Plane> pl; try{ for(int c=0;c<3;++c)pl.emplace_back(outW,outH); rgba.resize((size_t)outW*outH*4);}catch(...){return Status::OutOfMemory;}
+  const int chunk=32; std::vector<float> row;
+  for(int oy=0;oy<outH;oy+=chunk){
+    int hh=std::min(chunk,outH-oy); int sy=oy*factor; int rh=std::min(H-sy,hh*factor);
+    try{row.resize((size_t)W*rh);}catch(...){return Status::OutOfMemory;}
+    Status s=src.readRegion(0,sy,W,rh,row.data()); if(s!=Status::Ok)return s;
+    for(int y=0;y<hh;++y)for(int x=0;x<outW;++x){
+      double acc[3]={0,0,0};int n[3]={0,0,0};
+      const int x0=x*factor,y0=(oy+y)*factor;
+      for(int yy=y0;yy<std::min(H,y0+factor);++yy)for(int xx=x0;xx<std::min(W,x0+factor);++xx){
+        float v=row[(size_t)(yy-sy)*W+xx]; if(!std::isfinite(v))continue; int c=cfaChannel(cfa,xx,yy); acc[c]+=v;++n[c]; }
+      const float nan=std::numeric_limits<float>::quiet_NaN();
+      float v[3]; for(int c=0;c<3;++c)v[c]=n[c]?(float)(acc[c]/n[c]):nan;
+      if(cfa<0){ double a=0;int m=0; for(int c=0;c<3;++c)if(n[c]){a+=acc[c];m+=n[c];} float L=m?(float)(a/m):nan; v[0]=v[1]=v[2]=L; }
+      for(int c=0;c<3;++c)pl[c].at(x,oy+y)=v[c];
     }
-    p=std::move(filtered);
-  }for(int y=0;y<outH;++y)for(int x=0;x<outW;++x){float r,g,b;int rawX=std::min(W-1,x*factor),rawY=std::min(H-1,y*factor);float center=p.at(x,y);if(mode==0){r=g=b=stretchValue(center,lo,hi,stretch);}else{r=channelAt(p,cfa,x,y,0)*gainR;g=channelAt(p,cfa,x,y,1)*gainG;b=channelAt(p,cfa,x,y,2)*gainB;r=stretchValue(r,lo,hi,stretch);g=stretchValue(g,lo,hi,stretch);b=stretchValue(b,lo,hi,stretch);if(mode==2){r=std::pow(std::max(0.f,std::min(1.f,r)),.92f);g=std::pow(std::max(0.f,std::min(1.f,g)),.92f);b=std::pow(std::max(0.f,std::min(1.f,b)),.92f);}}applyTone(r,g,b,tone);size_t i=((size_t)y*outW+x)*4;rgba[i]=(uint8_t)(std::max(0.f,std::min(1.f,r))*255);rgba[i+1]=(uint8_t)(std::max(0.f,std::min(1.f,g))*255);rgba[i+2]=(uint8_t)(std::max(0.f,std::min(1.f,b))*255);rgba[i+3]=255;(void)rawX;(void)rawY;}
+  }
+  // Neutral background + white balance on co-located quads (colour modes only).
+  ChannelBalance bal; if(mode!=0)bal=computeChannelBalance(src,W,H,cfa);
+  for(int i=0;i<outW*outH;++i){
+    float r=pl[0].d[i],g=pl[1].d[i],b=pl[2].d[i];
+    if(mode==0){ float L=(r+g+b)/3.f; if(cfa>=0){int k=0;float a=0;for(float t:{r,g,b})if(std::isfinite(t)){a+=t;++k;}L=k?a/k:L;} pl[0].d[i]=pl[1].d[i]=pl[2].d[i]=L; }
+    else if(bal.measured){ pl[0].d[i]=bal.bg[1]+(r-bal.bg[0])*bal.gain[0]; pl[1].d[i]=g; pl[2].d[i]=bal.bg[1]+(b-bal.bg[2])*bal.gain[2]; }
+  }
+  if(denoise>0.001f){
+    const float amount=std::min(1.f,std::max(0.f,denoise));
+    for(int c=0;c<3;++c){
+      if(mode==0&&c>0){pl[c]=pl[0];continue;}
+      Plane f(outW,outH);
+      for(int y=0;y<outH;++y)for(int x=0;x<outW;++x){
+        float centerV=pl[c].at(x,y);if(!std::isfinite(centerV)){f.at(x,y)=centerV;continue;}
+        float sum=centerV,ws=1.f;
+        for(int dy=-2;dy<=2;++dy)for(int dx=-2;dx<=2;++dx){if(!dx&&!dy)continue;int nx=x+dx,ny=y+dy;if(nx<0||ny<0||nx>=outW||ny>=outH)continue;float v=pl[c].at(nx,ny);if(!std::isfinite(v))continue;float d=std::fabs(v-centerV);float ww=std::exp(-0.35f*float(dx*dx+dy*dy))*std::exp(-d*d/(0.0004f+0.03f*amount));sum+=v*ww;ws+=ww;}
+        float smooth=sum/ws;float edge=std::min(1.f,std::fabs(centerV-smooth)*20.f);float a=amount*0.55f*(1.f-edge);f.at(x,y)=centerV*(1.f-a)+smooth*a;
+      }
+      pl[c]=std::move(f);
+    }
+  }
+  std::vector<float> sample;sample.reserve(65536);
+  const int sy2=std::max(1,outH/256),sx2=std::max(1,outW/256);
+  for(int y=0;y<outH;y+=sy2)for(int x=0;x<outW;x+=sx2){float a=0;int k=0;for(int c=0;c<3;++c){float t=pl[c].at(x,y);if(std::isfinite(t)){a+=t;++k;}}if(k)sample.push_back(a/k);if(sample.size()>=65536)break;}
+  if(sample.empty())return Status::InvalidArgument;
+  auto q=[&](double qv){std::vector<float>a=sample;size_t k=(size_t)std::min<double>(a.size()-1,qv*(a.size()-1));std::nth_element(a.begin(),a.begin()+k,a.end());return a[k];};
+  float lo=q(.005),hi=q(.995);if(!(hi>lo))hi=lo+1e-3f;
+  for(int y=0;y<outH;++y)for(int x=0;x<outW;++x){
+    float r=pl[0].at(x,y),g=pl[1].at(x,y),b=pl[2].at(x,y);
+    if(!std::isfinite(r))r=lo;if(!std::isfinite(g))g=lo;if(!std::isfinite(b))b=lo;
+    r=stretchValue(r,lo,hi,stretch);g=stretchValue(g,lo,hi,stretch);b=stretchValue(b,lo,hi,stretch);
+    if(mode==2){r=std::pow(std::max(0.f,std::min(1.f,r)),.92f);g=std::pow(std::max(0.f,std::min(1.f,g)),.92f);b=std::pow(std::max(0.f,std::min(1.f,b)),.92f);}
+    applyTone(r,g,b,tone);
+    size_t i=((size_t)y*outW+x)*4;rgba[i]=(uint8_t)(std::max(0.f,std::min(1.f,r))*255);rgba[i+1]=(uint8_t)(std::max(0.f,std::min(1.f,g))*255);rgba[i+2]=(uint8_t)(std::max(0.f,std::min(1.f,b))*255);rgba[i+3]=255;
+  }
   return Status::Ok;
 }
 

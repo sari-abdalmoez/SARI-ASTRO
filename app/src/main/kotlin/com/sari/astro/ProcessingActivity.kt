@@ -205,11 +205,12 @@ class ProcessingActivity : Activity() {
         val jobTile = tile
         val jobWorkers = workers
         val jobStart = startTile
+        val jobCfa = cfa
         ex.submit {
             val r = NativeCore.stackProject(
                 lights, w, h, dark, flat, bias,
                 output.absolutePath, progress.absolutePath, report.absolutePath,
-                jobTile, jobWorkers, jobStart
+                jobTile, jobWorkers, jobStart, jobCfa
             )
             handler.post { onRunFinished(r) }
         }

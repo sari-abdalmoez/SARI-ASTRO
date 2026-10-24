@@ -1,5 +1,6 @@
 #include "export.h"
 #include "../core/tone.h"
+#include "../core/cfa.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -131,12 +132,6 @@ static bool quantiles(F32FileSource& src, int W, int H, float& lo, float& hi, fl
     const float med=nth(vals.size()/2);for(float&v:vals)v=std::fabs(v-med);noise=1.4826f*nth(vals.size()/2);if(!(noise>0))noise=std::max(1e-4f,(hi-lo)*0.002f);return true;
 }
 
-static void colorGains(F32FileSource& src,int W,int H,int cfa,float& gr,float& gg,float& gb){
-    std::vector<float> r,g,b; r.reserve(4096);g.reserve(4096);b.reserve(4096);const int step=std::max(1,(int)std::sqrt(std::max(1,(W*H)/32768)));const int rh=std::min(128,H);std::vector<float> row((size_t)W*rh);
-    for(int y=0;y<H&&(r.size()<4096||g.size()<4096||b.size()<4096);y+=rh){int hh=std::min(rh,H-y);if(src.readRegion(0,y,W,hh,row.data())!=Status::Ok)break;for(int yy=0;yy<hh;yy+=step)for(int x=0;x<W;x+=step){float v=row[(size_t)yy*W+x];if(v<0.02f||v>0.8f||!std::isfinite(v))continue;int c=cfaColor(cfa,x,y+yy);if(c==0&&r.size()<4096)r.push_back(v);else if(c==1&&g.size()<4096)g.push_back(v);else if(c==2&&b.size()<4096)b.push_back(v);}}
-    auto med=[](std::vector<float>&v){if(v.empty())return 1.f;size_t k=v.size()/2;std::nth_element(v.begin(),v.begin()+k,v.end());return v[k];};float mr=med(r),mg=med(g),mb=med(b);gg=1.f;gr=mr>1e-6f?std::max(.7f,std::min(1.5f,mg/mr)):1.f;gb=mb>1e-6f?std::max(.7f,std::min(1.5f,mg/mb)):1.f;
-}
-
 static void writeStoredIdat(std::ostream& out,const std::vector<uint8_t>&data,bool first){
     std::vector<uint8_t> payload;payload.reserve(data.size()+7);if(first){payload.push_back(0x78);payload.push_back(0x01);}uint16_t len=(uint16_t)data.size(),nlen=(uint16_t)~len;payload.push_back(0x00);payload.push_back((uint8_t)len);payload.push_back((uint8_t)(len>>8));payload.push_back((uint8_t)nlen);payload.push_back((uint8_t)(nlen>>8));payload.insert(payload.end(),data.begin(),data.end());writeChunk(out,"IDAT",payload);
 }
@@ -160,12 +155,12 @@ Status exportFullPng(const std::string&f32Path,int W,int H,int cfa,int mode,floa
     if(f32Path.empty()||outputPath.empty()||W<=0||H<=0) return Status::InvalidArgument;
     F32FileSource src(f32Path.c_str(),W,H);
     if(!src.ok()) return Status::IoError;
-    float lo=0,hi=1,noise=0;if(!quantiles(src,W,H,lo,hi,noise))return Status::IoError;float gainR=1,gainG=1,gainB=1;if(mode!=0)colorGains(src,W,H,cfa,gainR,gainG,gainB);
+    float lo=0,hi=1,noise=0;if(!quantiles(src,W,H,lo,hi,noise))return Status::IoError;ChannelBalance bal;if(mode!=0)bal=computeChannelBalance(src,W,H,cfa);
     std::ofstream out(outputPath,std::ios::binary|std::ios::trunc);if(!out)return Status::IoError;static const uint8_t sig[8]={137,80,78,71,13,10,26,10};out.write((const char*)sig,8);
     std::vector<uint8_t> ihdr(13);ihdr[0]=(uint8_t)(W>>24);ihdr[1]=(uint8_t)(W>>16);ihdr[2]=(uint8_t)(W>>8);ihdr[3]=(uint8_t)W;ihdr[4]=(uint8_t)(H>>24);ihdr[5]=(uint8_t)(H>>16);ihdr[6]=(uint8_t)(H>>8);ihdr[7]=(uint8_t)H;ihdr[8]=16;ihdr[9]=2;writeChunk(out,"IHDR",ihdr);
     const int radius=2,strip=64;std::vector<float>buf((size_t)W*(strip+radius*2)),dbuf(buf.size());std::vector<uint8_t>row((size_t)1+(size_t)W*6);uint32_t adler=1;bool first=true;
     for(int y0=0;y0<H;y0+=strip){int yStart=std::max(0,y0-radius),yEnd=std::min(H,y0+strip+radius),readH=yEnd-yStart;if(src.readRegion(0,yStart,W,readH,buf.data())!=Status::Ok)return Status::IoError;dbuf=buf;if(denoiseStrength>0.f){for(int yy=yStart;yy<yEnd;++yy)for(int x=0;x<W;++x)dbuf[(size_t)(yy-yStart)*W+x]=filteredRaw(buf,W,yStart,readH,cfa,x,yy,noise,denoiseStrength);}
-        const int rows=std::min(strip,H-y0);for(int y=0;y<rows;++y){row[0]=0;int gy=y0+y;for(int x=0;x<W;++x){float rr,gg,bb;if(mode==0){float v=valueAt(dbuf,W,yStart,readH,x,gy);rr=gg=bb=v;}else{rr=demosaicChannel(dbuf,W,yStart,readH,cfa,x,gy,0)*gainR;gg=demosaicChannel(dbuf,W,yStart,readH,cfa,x,gy,1)*gainG;bb=demosaicChannel(dbuf,W,yStart,readH,cfa,x,gy,2)*gainB;}rr=stretchValue(rr,lo,hi,stretch);gg=stretchValue(gg,lo,hi,stretch);bb=stretchValue(bb,lo,hi,stretch);if(mode==2){rr=std::pow(std::max(0.f,rr),.94f);gg=std::pow(std::max(0.f,gg),.94f);bb=std::pow(std::max(0.f,bb),.94f);}applyTone(rr,gg,bb,tone);uint16_t R=(uint16_t)std::lround(std::max(0.f,std::min(1.f,rr))*65535.f),G=(uint16_t)std::lround(std::max(0.f,std::min(1.f,gg))*65535.f),B=(uint16_t)std::lround(std::max(0.f,std::min(1.f,bb))*65535.f);size_t p=1+(size_t)x*6;row[p]=(uint8_t)(R>>8);row[p+1]=(uint8_t)R;row[p+2]=(uint8_t)(G>>8);row[p+3]=(uint8_t)G;row[p+4]=(uint8_t)(B>>8);row[p+5]=(uint8_t)B;}
+        const int rows=std::min(strip,H-y0);for(int y=0;y<rows;++y){row[0]=0;int gy=y0+y;for(int x=0;x<W;++x){float rr,gg,bb;if(mode==0){float v=valueAt(dbuf,W,yStart,readH,x,gy);rr=gg=bb=v;}else{rr=demosaicChannel(dbuf,W,yStart,readH,cfa,x,gy,0);gg=demosaicChannel(dbuf,W,yStart,readH,cfa,x,gy,1);bb=demosaicChannel(dbuf,W,yStart,readH,cfa,x,gy,2);if(bal.measured){rr=bal.bg[1]+(rr-bal.bg[0])*bal.gain[0];bb=bal.bg[1]+(bb-bal.bg[2])*bal.gain[2];}}rr=stretchValue(rr,lo,hi,stretch);gg=stretchValue(gg,lo,hi,stretch);bb=stretchValue(bb,lo,hi,stretch);if(mode==2){rr=std::pow(std::max(0.f,rr),.94f);gg=std::pow(std::max(0.f,gg),.94f);bb=std::pow(std::max(0.f,bb),.94f);}applyTone(rr,gg,bb,tone);uint16_t R=(uint16_t)std::lround(std::max(0.f,std::min(1.f,rr))*65535.f),G=(uint16_t)std::lround(std::max(0.f,std::min(1.f,gg))*65535.f),B=(uint16_t)std::lround(std::max(0.f,std::min(1.f,bb))*65535.f);size_t p=1+(size_t)x*6;row[p]=(uint8_t)(R>>8);row[p+1]=(uint8_t)R;row[p+2]=(uint8_t)(G>>8);row[p+3]=(uint8_t)G;row[p+4]=(uint8_t)(B>>8);row[p+5]=(uint8_t)B;}
             adler=adler32Update(adler,row.data(),row.size());size_t off=0;while(off<row.size()){size_t take=std::min<size_t>(65535,row.size()-off);std::vector<uint8_t>block(row.begin()+off,row.begin()+off+take);writeStoredIdat(out,block,first);first=false;off+=take;}
         }
     }

@@ -81,6 +81,15 @@ object DngImporter {
             val n = u32(); val d = u32()
             return if (d == 0L) 0.0 else n.toDouble() / d.toDouble()
         }
+        fun rationals(e: Entry): DoubleArray {
+            val out = DoubleArray(e.count.toInt())
+            file.seek(e.valueOffset)
+            for (i in out.indices) {
+                val n = u32(); val d = u32()
+                out[i] = if (d == 0L) 0.0 else n.toDouble() / d.toDouble()
+            }
+            return out
+        }
         fun signedRational(e: Entry): Double {
             file.seek(e.valueOffset)
             val n = readS32(); val d = readS32()
@@ -128,10 +137,19 @@ object DngImporter {
                 val counts = e[279]?.let{tiff.values(it)} ?: error("Missing StripByteCounts")
                 require(offsets.isNotEmpty() && offsets.size == counts.size) { "Invalid strip tables" }
                 val rowsPerStrip = (e[278]?.let{tiff.values(it).firstOrNull()} ?: height.toLong()).toInt().coerceAtLeast(1)
-                val black = e[50714]?.let { vals ->
-                    if (vals.type == 5 || vals.type == 10) tiff.rational(vals).toFloat()
-                    else tiff.values(vals).average().toFloat()
-                } ?: 0f
+                val blackVals: DoubleArray = e[50714]?.let { be ->
+                    if (be.type == 5 || be.type == 10) tiff.rationals(be)
+                    else tiff.values(be).map { it.toDouble() }.toDoubleArray()
+                } ?: DoubleArray(0)
+                // 2x2 pattern (row-major raw layout) when four values are given, else one common level.
+                val blackPos = FloatArray(4) { i ->
+                    when (blackVals.size) {
+                        0 -> 0f
+                        4 -> blackVals[i].toFloat()
+                        else -> blackVals.average().toFloat()
+                    }
+                }
+                val black = blackPos.average().toFloat()
                 val white = e[50717]?.let{tiff.values(it).firstOrNull()?.toFloat()}?.takeIf{it>0}
                     ?: 65535f
                 val cfa = cfaCode(e[33422]?.let{tiff.values(it)} ?: LongArray(0))
@@ -159,7 +177,8 @@ object DngImporter {
                                     val a = rowBuf[x * 2].toInt() and 0xff
                                     val b = rowBuf[x * 2 + 1].toInt() and 0xff
                                     val raw = (if (tiff.littleEndian) (a or (b shl 8)) else ((a shl 8) or b)).toFloat()
-                                    floatBuf.putFloat(((raw - black) / denom).coerceIn(0f, 1f))
+                                    // Keep negative noise (see ProjectRepository.writeRawF32); limit only saturation.
+                                    floatBuf.putFloat(minOf(1f, (raw - blackPos[(x and 1) + ((yBase and 1) shl 1)]) / denom))
                                 }
                                 os.write(floatBuf.array())
                                 yBase++

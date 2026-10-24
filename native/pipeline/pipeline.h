@@ -16,7 +16,7 @@ Status stackProject(const std::vector<std::string>& lightPaths,
                    const std::string& outputPath,const std::string& progressPath,const std::string& reportPath,
                    int tile,int workers,int startTile,
                    const std::function<bool(int,int)>& cancelOrContinue,
-                   PipelineReport& out);
+                   PipelineReport& out,int cfa=-1);
 Status renderPreview(const std::string& f32Path,int W,int H,int cfa,int mode,float stretch,float denoise,int maxDim,
                      std::vector<uint8_t>& rgba,int& outW,int& outH);
 Status renderPreview(const std::string& f32Path,int W,int H,int cfa,int mode,float stretch,float denoise,const Tone& tone,int maxDim,

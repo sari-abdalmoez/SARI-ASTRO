@@ -21,9 +21,9 @@ object NativeCore {
         return Plan(a[0], a[1], a[2] == 1, a[3], a[4])
     }
     fun recommendMode(d: DeviceProfile): Int = if (!available) 0 else runCatching { nativeRecommendMode(d.totalRam, d.availRam, d.cores, d.thermal) }.getOrDefault(0)
-    fun stackProject(lights: Array<String>, w: Int, h: Int, dark: String?, flat: String?, bias: String?, output: String, progress: String, report: String, tile: Int, workers: Int, startTile: Int): StackResult? {
+    fun stackProject(lights: Array<String>, w: Int, h: Int, dark: String?, flat: String?, bias: String?, output: String, progress: String, report: String, tile: Int, workers: Int, startTile: Int, cfa: Int = -1): StackResult? {
         if (!available) return null
-        val a = runCatching { nativeStackProject(lights, w, h, dark, flat, bias, output, progress, report, tile, workers, startTile) }.getOrNull() ?: return null
+        val a = runCatching { nativeStackProject(lights, w, h, dark, flat, bias, output, progress, report, tile, workers, startTile, cfa) }.getOrNull() ?: return null
         if (a.size < 5) return null
         return StackResult(a[0], a[1], a[2], a[3], a[4])
     }
@@ -65,7 +65,7 @@ object NativeCore {
     @JvmStatic private external fun nativeVersion(): String
     @JvmStatic private external fun nativePlanStack(w: Int, h: Int, frames: Int, total: Long, avail: Long, cores: Int, thermal: Int, mode: Int): IntArray?
     @JvmStatic private external fun nativeRecommendMode(total: Long, avail: Long, cores: Int, thermal: Int): Int
-    @JvmStatic private external fun nativeStackProject(lights: Array<String>, w: Int, h: Int, dark: String?, flat: String?, bias: String?, output: String, progress: String, report: String, tile: Int, workers: Int, startTile: Int): IntArray?
+    @JvmStatic private external fun nativeStackProject(lights: Array<String>, w: Int, h: Int, dark: String?, flat: String?, bias: String?, output: String, progress: String, report: String, tile: Int, workers: Int, startTile: Int, cfa: Int): IntArray?
     @JvmStatic private external fun nativeCancelStack()
     @JvmStatic private external fun nativeExportFullPng(path: String, w: Int, h: Int, cfa: Int, mode: Int, stretch: Float, denoise: Float, brightness: Float, saturation: Float, nebula: Float, output: String): Int
     @JvmStatic private external fun nativeExportLinearFits(path: String, w: Int, h: Int, cfa: Int, output: String): Int

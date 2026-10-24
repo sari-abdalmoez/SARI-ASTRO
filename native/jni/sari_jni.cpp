@@ -55,11 +55,12 @@ JNIEXPORT jintArray JNICALL Java_com_sari_astro_nativebridge_NativeCore_nativeSt
     jstring report,
     jint tile,
     jint workers,
-    jint startTile
+    jint startTile,
+    jint cfa
 ){
   g_cancel.store(false,std::memory_order_release);try{
     std::vector<std::string>lp;std::string dp,fp,bp,op,pp,rp;if(!getStringArray(env,lights,lp)||!getString(env,dark,dp)||!getString(env,flat,fp)||!getString(env,bias,bp)||!getString(env,output,op,false)||!getString(env,progress,pp)||!getString(env,report,rp))return nullptr;
-    PipelineReport pr;Status st=stackProject(lp,w,h,dp,fp,bp,op,pp,rp,tile,workers,startTile,[&](int,int){return !g_cancel.load(std::memory_order_acquire);},pr);g_cancel.store(false,std::memory_order_release);
+    PipelineReport pr;Status st=stackProject(lp,w,h,dp,fp,bp,op,pp,rp,tile,workers,startTile,[&](int,int){return !g_cancel.load(std::memory_order_acquire);},pr,cfa);g_cancel.store(false,std::memory_order_release);
     return makeInts(env,{(jint)st,(jint)pr.framesInput,(jint)pr.framesIncluded,(jint)pr.tilesDone,(jint)pr.tilesTotal});
   }catch(const std::exception&e){g_cancel.store(false,std::memory_order_release);__android_log_print(ANDROID_LOG_ERROR,TAG,"stackProject: %s",e.what());return makeInts(env,{(jint)Status::IoError,0,0,0,0});}catch(...){g_cancel.store(false,std::memory_order_release);return makeInts(env,{(jint)Status::IoError,0,0,0,0});}
 }

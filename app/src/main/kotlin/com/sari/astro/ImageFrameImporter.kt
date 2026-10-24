@@ -85,8 +85,8 @@ object ImageFrameImporter {
             RandomAccessFile(f32Target, "rw").use { raf ->
                 raf.setLength(byteCount)
                 raf.channel.use { ch ->
-                    val mapped = ch.map(FileChannel.MapMode.READ_WRITE, 0, byteCount)
-                    val buf = mapped.order(ByteOrder.LITTLE_ENDIAN)
+                    val buf = ch.map(FileChannel.MapMode.READ_WRITE, 0, byteCount)
+                        .order(ByteOrder.LITTLE_ENDIAN)
                     var y0 = 0
                     while (y0 < sh) {
                         val y1 = minOf(sh, y0 + STRIP_ROWS)
@@ -118,7 +118,7 @@ object ImageFrameImporter {
                         }
                         y0 = y1
                     }
-                    mapped.force()
+                    buf.force()
                 }
             }
         } catch (oom: OutOfMemoryError) {
